@@ -36,34 +36,34 @@ pub fn main() !void {
                 }
             }
             if (!found) {
-                // try stdout.print("{s}: not found\n", .{args});
-                try typeBuilt(alloc, args);
+                if (try typeBuilt(alloc, args)) |p| {
+                    defer alloc.free(p);
+                    try stdout.print("{s} is {s}\n", .{ args, p });
+                } else {
+                    try stdout.print("{s}: not found\n", .{args});
+                }
             }
         } else {
-            try stdout.print("{s}: command not found\n", .{cmd});
+            if (try typeBuilt(alloc, cmd)) |p| {
+                defer alloc.free(p);
+                const res = try std.process.Child.run(.{ .allocator = alloc, .argv = &[_][]const u8{ cmd, args } });
+                try stdout.print("{s}", .{res.stdout});
+            } else {
+                try stdout.print("{s}: command not found\n", .{cmd});
+            }
         }
     }
 }
 
-fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !void {
-    const env_path = std.posix.getenv("PATH") orelse "";
-    var folders = std.mem.splitScalar(u8, env_path, ':');
+fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !?[]const u8 {
+    const env_path = std.posix.getenv("PATH");
+    var folders = std.mem.tokenizeAny(u8, env_path.?, ":");
 
     while (folders.next()) |folder| {
-        var dir = std.fs.cwd().openDir(folder, .{ .iterate = true }) catch {
-            continue;
-        };
-        defer dir.close();
-
-        var walker = try dir.walk(alloc);
-        defer walker.deinit();
-
-        while (try walker.next()) |entry| {
-            if (std.mem.eql(u8, entry.basename, args)) {
-                return try std.io.getStdOut().writer().print("{0s} is {1s}/{0s}\n", .{ entry.basename, folder });
-            }
-        }
+        const full_path = try std.fs.path.join(alloc, &[_][]const u8{ folder, args });
+        std.fs.accessAbsolute(full_path, .{ .mode = .read_only }) catch continue;
+        return full_path;
     }
 
-    try std.io.getStdOut().writer().print("{s}: not found\n", .{args});
+    return null;
 }
