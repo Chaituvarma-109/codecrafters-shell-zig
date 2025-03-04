@@ -19,6 +19,8 @@ pub fn main() !void {
         if (cmd) |c| {
             if (std.mem.eql(u8, c, "exit")) {
                 std.posix.exit(0);
+            } else if (std.mem.eql(u8, c, "echo")) {
+                try stdout.print("{s}\n", .{token_iter.rest()});
             } else {
                 try stdout.print("{s}: command not found\n", .{c});
             }
