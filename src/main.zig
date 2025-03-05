@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const builtins = [_][]const u8{ "exit", "echo", "type" };
+const builtins = [_][]const u8{ "exit", "echo", "type", "pwd" };
 
 pub fn main() !void {
     // Uncomment this block to pass the first stage
@@ -24,6 +24,11 @@ pub fn main() !void {
 
         if (std.mem.eql(u8, cmd, "exit")) {
             std.posix.exit(0);
+        } else if (std.mem.eql(u8, cmd, "pwd")) {
+            var buff: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            const pwd = try std.process.getCwd(&buff);
+
+            try stdout.print("{s}\n", .{pwd});
         } else if (std.mem.eql(u8, cmd, "echo")) {
             try stdout.print("{s}\n", .{args});
         } else if (std.mem.eql(u8, cmd, "type")) {
