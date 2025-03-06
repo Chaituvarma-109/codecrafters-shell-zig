@@ -20,10 +20,18 @@ pub fn main() !void {
         var token_iter = std.mem.splitSequence(u8, trim_inp, " ");
 
         const cmd = token_iter.first();
-        const args = token_iter.rest();
+        var args = token_iter.rest();
 
         if (std.mem.eql(u8, cmd, "exit")) {
             std.posix.exit(0);
+        } else if (std.mem.eql(u8, cmd, "cd")) {
+            const home: []const u8 = "HOME";
+            if (std.mem.eql(u8, args, "~")) {
+                args = std.posix.getenv(home) orelse "";
+            }
+            std.posix.chdir(args) catch {
+                try stdout.print("{s}: No such file or directory\n", .{args});
+            };
         } else if (std.mem.eql(u8, cmd, "pwd")) {
             var buff: [std.fs.MAX_PATH_BYTES]u8 = undefined;
             const pwd = try std.process.getCwd(&buff);
