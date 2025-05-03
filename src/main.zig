@@ -16,31 +16,38 @@ pub fn main() !void {
         var buffer: [1024]u8 = undefined;
         const user_input = try stdin.readUntilDelimiter(&buffer, '\n');
 
-        const trim_inp = std.mem.trim(u8, user_input, "\r\n");
-        var token_iter = std.mem.splitSequence(u8, trim_inp, " ");
+        // const trim_inp = std.mem.trim(u8, user_input, "\r\n");
+        // var token_iter = std.mem.splitSequence(u8, trim_inp, " ");
 
-        const cmd = token_iter.first();
-        var args = token_iter.rest();
+        var cmds = try parse_inp(alloc, user_input);
+        const cmd = cmds.items[0];
+        // var args = cmds.items[1..];
+        // var args = token_iter.rest();
 
         if (std.mem.eql(u8, cmd, "exit")) {
             std.posix.exit(0);
         } else if (std.mem.eql(u8, cmd, "cd")) {
             const home: []const u8 = "HOME";
-            if (std.mem.eql(u8, args, "~")) {
-                args = std.posix.getenv(home) orelse "";
+            var arg: []const u8 = cmds.items[1..][0];
+            if (std.mem.eql(u8, cmds.items[1], "~")) {
+                arg = std.posix.getenv(home) orelse "";
             }
-            std.posix.chdir(args) catch {
-                try stdout.print("{s}: No such file or directory\n", .{args});
+            std.posix.chdir(arg) catch {
+                try stdout.print("cd: {s}: No such file or directory\n", .{arg});
             };
         } else if (std.mem.eql(u8, cmd, "pwd")) {
-            var buff: [std.fs.MAX_PATH_BYTES]u8 = undefined;
+            var buff: [std.fs.max_path_bytes]u8 = undefined;
             const pwd = try std.process.getCwd(&buff);
 
             try stdout.print("{s}\n", .{pwd});
         } else if (std.mem.eql(u8, cmd, "echo")) {
-            try stdout.print("{s}\n", .{args});
+            const joined = try std.mem.join(alloc, " ", cmds.items[1..]);
+            defer alloc.free(joined);
+            try stdout.print("{s}\n", .{joined});
+            continue;
         } else if (std.mem.eql(u8, cmd, "type")) {
             var found: bool = false;
+            const args = cmds.items[1];
             for (builtins) |builtin| {
                 if (std.mem.eql(u8, builtin, args)) {
                     try stdout.print("{s} is a shell builtin\n", .{args});
@@ -59,7 +66,16 @@ pub fn main() !void {
         } else {
             if (try typeBuilt(alloc, cmd)) |p| {
                 defer alloc.free(p);
-                const res = try std.process.Child.run(.{ .allocator = alloc, .argv = &[_][]const u8{ cmd, args } });
+
+                var argv = std.ArrayList([]const u8).init(alloc);
+                defer argv.deinit();
+                try argv.append(cmd);
+
+                for (cmds.items[1..]) |arg| {
+                    try argv.append(arg);
+                }
+
+                const res = try std.process.Child.run(.{ .allocator = alloc, .argv = argv.items });
                 try stdout.print("{s}", .{res.stdout});
             } else {
                 try stdout.print("{s}: command not found\n", .{cmd});
@@ -79,4 +95,52 @@ fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !?[]const u8 {
     }
 
     return null;
+}
+
+fn parse_inp(alloc: std.mem.Allocator, args: []const u8) !std.ArrayList([]const u8) {
+    var tokens = std.ArrayList([]const u8).init(alloc);
+    errdefer tokens.deinit();
+
+    var pos: usize = 0;
+    while (pos < args.len) {
+        if (args[pos] == ' ') {
+            pos += 1;
+            continue;
+        }
+
+        var token = std.ArrayList(u8).init(alloc);
+        while (pos < args.len and args[pos] != ' ') {
+            switch (args[pos]) {
+                '\'', '"' => {
+                    const quote = args[pos];
+                    pos += 1;
+
+                    while (args[pos] != quote) {
+                        if (quote == '"' and args[pos] == '\\' and switch (args[pos + 1]) {
+                            '"', '\\', '$', '\n' => true,
+                            else => false,
+                        }) {
+                            pos += 1;
+                        }
+                        try token.append(args[pos]);
+                        pos += 1;
+                    }
+                    pos += 1;
+                },
+
+                '\\' => {
+                    try token.append(args[pos + 1]);
+                    pos += 2;
+                },
+
+                else => {
+                    try token.append(args[pos]);
+                    pos += 1;
+                },
+            }
+        }
+        try tokens.append(try token.toOwnedSlice());
+    }
+
+    return tokens;
 }
