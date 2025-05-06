@@ -9,45 +9,109 @@ pub fn main() !void {
     const alloc = gpa.allocator();
     defer _ = gpa.deinit();
 
+    const buff = try alloc.alloc(u8, 1024);
+    defer alloc.free(buff);
+
+    // defer {
+    //     if (gpa.detectLeaks()) {
+    //         std.debug.print("Memory leak detected!\n", .{});
+    //     } else {
+    //         std.debug.print("No leaks!\n", .{});
+    //     }
+    // }
+
     while (true) {
         try stdout.print("$ ", .{});
 
         const stdin = std.io.getStdIn().reader();
-        var buffer: [1024]u8 = undefined;
-        const user_input = try stdin.readUntilDelimiter(&buffer, '\n');
+        const user_input = try stdin.readUntilDelimiter(buff, '\n');
 
-        // const trim_inp = std.mem.trim(u8, user_input, "\r\n");
-        // var token_iter = std.mem.splitSequence(u8, trim_inp, " ");
+        const cmds = try parse_inp(alloc, user_input);
+        defer {
+            for (cmds) |cmd| {
+                alloc.free(cmd);
+            }
+            alloc.free(cmds);
+        }
 
-        var cmds = try parse_inp(alloc, user_input);
-        const cmd = cmds.items[0];
-        // var args = cmds.items[1..];
-        // var args = token_iter.rest();
+        var index: ?usize = null;
+        var target: u8 = 1;
+        var append = false;
+
+        for (cmds, 0..) |cm, i| {
+            if (std.mem.eql(u8, cm, ">") or std.mem.eql(u8, cm, "1>") or std.mem.eql(u8, cm, "2>")) {
+                index = i;
+                if (cm.len == 2) {
+                    target = cm[0] - '0';
+                }
+                break;
+            }
+
+            if (std.mem.eql(u8, cm, ">>") or std.mem.eql(u8, cm, "1>>") or std.mem.eql(u8, cm, "2>>")) {
+                append = true;
+                index = i;
+                if (cm.len == 3) {
+                    target = cm[0] - '0';
+                }
+                break;
+            }
+        }
+
+        var outf: ?std.fs.File = null;
+        var errf: ?std.fs.File = null;
+        var out = stdout;
+        var argv = cmds;
+
+        if (index) |ind| {
+            argv = cmds[0..ind];
+            if (target == 1) {
+                outf = try std.fs.cwd().createFile(cmds[ind + 1], .{ .truncate = !append });
+
+                if (outf) |file| {
+                    if (append) try file.seekFromEnd(0);
+
+                    out = file.writer();
+                }
+            } else {
+                errf = try std.fs.cwd().createFile(cmds[ind + 1], .{ .truncate = !append });
+
+                if (errf) |file| {
+                    if (append) try file.seekFromEnd(0);
+                }
+            }
+        }
+
+        defer if (outf) |file| file.close();
+        defer if (errf) |file| file.close();
+
+        // std.debug.print("index: {d}\ntarget: {any}\n", .{ index, target });
+
+        const cmd = argv[0];
 
         if (std.mem.eql(u8, cmd, "exit")) {
             std.posix.exit(0);
         } else if (std.mem.eql(u8, cmd, "cd")) {
             const home: []const u8 = "HOME";
-            var arg: []const u8 = cmds.items[1..][0];
-            if (std.mem.eql(u8, cmds.items[1], "~")) {
+            var arg: []const u8 = argv[1];
+            if (std.mem.eql(u8, argv[1], "~")) {
                 arg = std.posix.getenv(home) orelse "";
             }
             std.posix.chdir(arg) catch {
                 try stdout.print("cd: {s}: No such file or directory\n", .{arg});
             };
         } else if (std.mem.eql(u8, cmd, "pwd")) {
-            var buff: [std.fs.max_path_bytes]u8 = undefined;
-            const pwd = try std.process.getCwd(&buff);
+            const pwd = try std.process.getCwd(buff);
 
             try stdout.print("{s}\n", .{pwd});
         } else if (std.mem.eql(u8, cmd, "echo")) {
-            const joined = try std.mem.join(alloc, " ", cmds.items[1..]);
-            defer alloc.free(joined);
-            try stdout.print("{s}\n", .{joined});
-            continue;
+            if (argv.len < 2) return;
+            for (argv[1 .. argv.len - 1]) |arg| {
+                try out.print("{s} ", .{arg});
+            }
+            try out.print("{s}\n", .{argv[argv.len - 1]});
         } else if (std.mem.eql(u8, cmd, "type")) {
             var found: bool = false;
-            const args = cmds.items[1];
+            const args = argv[1];
             for (builtins) |builtin| {
                 if (std.mem.eql(u8, builtin, args)) {
                     try stdout.print("{s} is a shell builtin\n", .{args});
@@ -56,27 +120,48 @@ pub fn main() !void {
                 }
             }
             if (!found) {
-                if (try typeBuilt(alloc, args)) |p| {
-                    defer alloc.free(p);
+                if (try typeBuilt(args, buff)) |p| {
                     try stdout.print("{s} is {s}\n", .{ args, p });
                 } else {
                     try stdout.print("{s}: not found\n", .{args});
                 }
             }
         } else {
-            if (try typeBuilt(alloc, cmd)) |p| {
-                defer alloc.free(p);
+            if (try typeBuilt(cmd, buff)) |_| {
+                // var argv = std.ArrayList([]const u8).init(alloc);
+                // defer argv.deinit();
 
-                var argv = std.ArrayList([]const u8).init(alloc);
-                defer argv.deinit();
-                try argv.append(cmd);
+                // for (cmds) |arg| {
+                //     try argv.append(arg);
+                // }
 
-                for (cmds.items[1..]) |arg| {
-                    try argv.append(arg);
+                var res = std.process.Child.init(argv, alloc);
+                res.stdin_behavior = .Inherit;
+                res.stdout_behavior = .Inherit;
+                res.stderr_behavior = .Inherit;
+
+                if (outf) |file| {
+                    res.stdout_behavior = .Pipe;
+                    try res.spawn();
+
+                    try file.writeFileAllUnseekable(res.stdout.?, .{});
+                } else if (errf) |file| {
+                    res.stderr_behavior = .Pipe;
+
+                    try res.spawn();
+
+                    try file.writeFileAllUnseekable(res.stderr.?, .{});
+                } else {
+                    res.stdout_behavior = .Inherit;
+
+                    try res.spawn();
                 }
-
-                const res = try std.process.Child.run(.{ .allocator = alloc, .argv = argv.items });
-                try stdout.print("{s}", .{res.stdout});
+                // defer {
+                //     alloc.free(res.stdout);
+                //     alloc.free(res.stderr);
+                // }
+                // try stdout.print("{s}", .{res.stdout});
+                _ = try res.wait();
             } else {
                 try stdout.print("{s}: command not found\n", .{cmd});
             }
@@ -84,12 +169,12 @@ pub fn main() !void {
     }
 }
 
-fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !?[]const u8 {
+fn typeBuilt(args: []const u8, buff: []u8) !?[]const u8 {
     const env_path = std.posix.getenv("PATH");
     var folders = std.mem.tokenizeAny(u8, env_path.?, ":");
 
     while (folders.next()) |folder| {
-        const full_path = try std.fs.path.join(alloc, &[_][]const u8{ folder, args });
+        const full_path = try std.fmt.bufPrint(buff, "{s}/{s}", .{ folder, args });
         std.fs.accessAbsolute(full_path, .{ .mode = .read_only }) catch continue;
         return full_path;
     }
@@ -97,9 +182,9 @@ fn typeBuilt(alloc: std.mem.Allocator, args: []const u8) !?[]const u8 {
     return null;
 }
 
-fn parse_inp(alloc: std.mem.Allocator, args: []const u8) !std.ArrayList([]const u8) {
+fn parse_inp(alloc: std.mem.Allocator, args: []const u8) ![][]const u8 {
     var tokens = std.ArrayList([]const u8).init(alloc);
-    errdefer tokens.deinit();
+    defer tokens.deinit();
 
     var pos: usize = 0;
     while (pos < args.len) {
@@ -109,6 +194,7 @@ fn parse_inp(alloc: std.mem.Allocator, args: []const u8) !std.ArrayList([]const 
         }
 
         var token = std.ArrayList(u8).init(alloc);
+        defer token.deinit();
         while (pos < args.len and args[pos] != ' ') {
             switch (args[pos]) {
                 '\'', '"' => {
@@ -125,7 +211,7 @@ fn parse_inp(alloc: std.mem.Allocator, args: []const u8) !std.ArrayList([]const 
                         try token.append(args[pos]);
                         pos += 1;
                     }
-                    pos += 1;
+                    if (pos < args.len) pos += 1;
                 },
 
                 '\\' => {
@@ -139,8 +225,10 @@ fn parse_inp(alloc: std.mem.Allocator, args: []const u8) !std.ArrayList([]const 
                 },
             }
         }
-        try tokens.append(try token.toOwnedSlice());
+        if (token.items.len > 0) {
+            try tokens.append(try token.toOwnedSlice());
+        }
     }
 
-    return tokens;
+    return try tokens.toOwnedSlice();
 }
