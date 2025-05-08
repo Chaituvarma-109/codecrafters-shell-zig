@@ -16,3 +16,6 @@ bin/
 **/.DS_Store
 *.swp
 *~
+
+src/temp.zig
+src/t.c

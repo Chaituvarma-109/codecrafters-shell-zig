@@ -1,4 +1,10 @@
 const std = @import("std");
+const clib = @cImport({
+    @cInclude("stdio.h");
+    @cInclude("stdlib.h");
+    @cInclude("string.h");
+    @cInclude("readline/readline.h");
+});
 
 const builtins = [_][]const u8{ "exit", "echo", "type", "pwd" };
 
@@ -12,6 +18,8 @@ pub fn main() !void {
     const buff = try alloc.alloc(u8, 1024);
     defer alloc.free(buff);
 
+    clib.rl_attempted_completion_function = &completion;
+
     // defer {
     //     if (gpa.detectLeaks()) {
     //         std.debug.print("Memory leak detected!\n", .{});
@@ -21,10 +29,12 @@ pub fn main() !void {
     // }
 
     while (true) {
-        try stdout.print("$ ", .{});
-
-        const stdin = std.io.getStdIn().reader();
-        const user_input = try stdin.readUntilDelimiter(buff, '\n');
+        // try stdout.print("$ ", .{});
+        // const stdin = std.io.getStdIn().reader();
+        const line = clib.readline("$ ");
+        defer clib.free(line);
+        const ln_len = std.mem.len(line);
+        const user_input: []u8 = line[0..ln_len];
 
         const cmds = try parse_inp(alloc, user_input);
         defer {
@@ -231,4 +241,35 @@ fn parse_inp(alloc: std.mem.Allocator, args: []const u8) ![][]const u8 {
     }
 
     return try tokens.toOwnedSlice();
+}
+
+fn completion(text: [*c]const u8, start: c_int, _: c_int) callconv(.c) [*c][*c]u8 {
+    var matches: [*c][*c]u8 = null;
+
+    if (start == 0) {
+        matches = clib.rl_completion_matches(text, &custom_completion);
+    }
+    return matches;
+}
+
+var completion_index: usize = undefined;
+var text_len: usize = undefined;
+fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
+    if (state == 0) {
+        completion_index = 0;
+        text_len = std.mem.len(text);
+    }
+
+    const txt = text[0..text_len];
+
+    while (completion_index < builtins.len) {
+        const builtin_name = builtins[completion_index];
+        completion_index += 1;
+
+        if (std.mem.startsWith(u8, builtin_name, txt)) {
+            return clib.strdup(builtin_name.ptr);
+        }
+    }
+
+    return null;
 }
