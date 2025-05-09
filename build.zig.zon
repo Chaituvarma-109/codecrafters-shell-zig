@@ -1,9 +1,6 @@
 .{
     .name = .codecrafters_shell,
-<<<<<<< HEAD
-=======
 
->>>>>>> 855fca4 (codecrafters submit [skip ci])
     .fingerprint = 0xc6b1d97d1151b03c,
 
     // This is a [Semantic Version](https://semver.org/).
