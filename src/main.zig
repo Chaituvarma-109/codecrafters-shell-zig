@@ -21,14 +21,6 @@ pub fn main() !void {
     completion_path = std.posix.getenv("PATH");
     clib.rl_attempted_completion_function = &completion;
 
-    // defer {
-    //     if (gpa.detectLeaks()) {
-    //         std.debug.print("Memory leak detected!\n", .{});
-    //     } else {
-    //         std.debug.print("No leaks!\n", .{});
-    //     }
-    // }
-
     while (true) {
         // try stdout.print("$ ", .{});
         // const stdin = std.io.getStdIn().reader();
@@ -263,7 +255,6 @@ var iteration: enum {
     Builtins,
     Path,
 } = .None;
-// var Builtins = true;
 fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     if (state == 0) {
         completion_index = 0;
@@ -282,7 +273,6 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
                 return clib.strdup(builtin_name.ptr);
             }
         }
-        // Builtins = false;
         if (completion_path == null) {
             iteration = .None;
         } else {
@@ -292,36 +282,6 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
         }
     }
 
-    // if (!Builtins) {
-    //     const env_path = std.posix.getenv("PATH");
-    //     var path_iter = std.mem.tokenizeAny(u8, env_path.?, ":");
-    //     const ztext: []const u8 = std.mem.span(text);
-
-    //     while (path_iter.next()) |path| {
-    //         var buf: [std.fs.max_path_bytes]u8 = undefined;
-    //         const full_path = std.fmt.bufPrint(buf[0..], "{s}/{s}", .{ path, ztext }) catch continue;
-    //         // const p = std.fs.realpath(path, &buf) catch continue;
-    //         // std.debug.print("p: {s}\n", .{p});
-    //         std.fs.accessAbsolute(full_path, .{ .mode = .read_only }) catch continue;
-    //         // std.debug.print("accessAbsolute path: {s}\n", .{full_path});
-    //         const dir = std.fs.openDirAbsolute(full_path, .{ .iterate = true }) catch continue;
-    //         dir_iterator = dir.iterate();
-    //         // continue :again;
-    //         while (dir_iterator.?.next() catch unreachable) |entry| {
-    //             // std.debug.print("dir: {s}\n", .{entry.name});
-    //             switch (entry.kind) {
-    //                 .file => {
-    //                     // std.debug.print("entry name ptr: {s}\n", .{entry.name});
-    //                     if (std.mem.eql(u8, entry.name, txt)) {
-    //                         return clib.strdup(entry.name.ptr);
-    //                     }
-    //                 },
-
-    //                 else => continue,
-    //             }
-    //         }
-    //     }
-    // }
     again: while (iteration == .Path) {
         if (dir_iterator == null) {
             if (path_iterator.?.next()) |path| {
