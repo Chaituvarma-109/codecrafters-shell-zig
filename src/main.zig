@@ -18,6 +18,7 @@ pub fn main() !void {
     const buff = try alloc.alloc(u8, 1024);
     defer alloc.free(buff);
 
+    completion_path = std.posix.getenv("PATH");
     clib.rl_attempted_completion_function = &completion;
 
     // defer {
@@ -254,20 +255,101 @@ fn completion(text: [*c]const u8, start: c_int, _: c_int) callconv(.c) [*c][*c]u
 
 var completion_index: usize = undefined;
 var text_len: usize = undefined;
+var completion_path: ?[]const u8 = null; // To be assigned the value of $PATH
+var path_iterator: ?std.mem.TokenIterator(u8, .scalar) = null;
+var dir_iterator: ?std.fs.Dir.Iterator = null;
+var iteration: enum {
+    None,
+    Builtins,
+    Path,
+} = .None;
+// var Builtins = true;
 fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     if (state == 0) {
         completion_index = 0;
         text_len = std.mem.len(text);
+        iteration = .Builtins;
     }
 
     const txt = text[0..text_len];
 
-    while (completion_index < builtins.len) {
-        const builtin_name = builtins[completion_index];
-        completion_index += 1;
+    if (iteration == .Builtins) {
+        while (completion_index < builtins.len) {
+            const builtin_name = builtins[completion_index];
+            completion_index += 1;
 
-        if (std.mem.startsWith(u8, builtin_name, txt)) {
-            return clib.strdup(builtin_name.ptr);
+            if (std.mem.startsWith(u8, builtin_name, txt)) {
+                return clib.strdup(builtin_name.ptr);
+            }
+        }
+        // Builtins = false;
+        if (completion_path == null) {
+            iteration = .None;
+        } else {
+            iteration = .Path;
+
+            path_iterator = std.mem.tokenizeScalar(u8, completion_path.?, ':');
+        }
+    }
+
+    // if (!Builtins) {
+    //     const env_path = std.posix.getenv("PATH");
+    //     var path_iter = std.mem.tokenizeAny(u8, env_path.?, ":");
+    //     const ztext: []const u8 = std.mem.span(text);
+
+    //     while (path_iter.next()) |path| {
+    //         var buf: [std.fs.max_path_bytes]u8 = undefined;
+    //         const full_path = std.fmt.bufPrint(buf[0..], "{s}/{s}", .{ path, ztext }) catch continue;
+    //         // const p = std.fs.realpath(path, &buf) catch continue;
+    //         // std.debug.print("p: {s}\n", .{p});
+    //         std.fs.accessAbsolute(full_path, .{ .mode = .read_only }) catch continue;
+    //         // std.debug.print("accessAbsolute path: {s}\n", .{full_path});
+    //         const dir = std.fs.openDirAbsolute(full_path, .{ .iterate = true }) catch continue;
+    //         dir_iterator = dir.iterate();
+    //         // continue :again;
+    //         while (dir_iterator.?.next() catch unreachable) |entry| {
+    //             // std.debug.print("dir: {s}\n", .{entry.name});
+    //             switch (entry.kind) {
+    //                 .file => {
+    //                     // std.debug.print("entry name ptr: {s}\n", .{entry.name});
+    //                     if (std.mem.eql(u8, entry.name, txt)) {
+    //                         return clib.strdup(entry.name.ptr);
+    //                     }
+    //                 },
+
+    //                 else => continue,
+    //             }
+    //         }
+    //     }
+    // }
+    again: while (iteration == .Path) {
+        if (dir_iterator == null) {
+            if (path_iterator.?.next()) |path| {
+                var buf: [std.fs.max_path_bytes]u8 = undefined;
+                const p = std.fs.realpath(path, &buf) catch continue :again;
+                const dir = std.fs.openDirAbsolute(p, .{ .iterate = true }) catch continue :again;
+                dir_iterator = dir.iterate();
+                continue :again;
+            } else {
+                iteration = .None;
+
+                path_iterator = null;
+
+                break :again;
+            }
+        }
+
+        while (dir_iterator.?.next() catch unreachable) |entry| {
+            switch (entry.kind) {
+                .file => {
+                    if (std.mem.startsWith(u8, entry.name, txt))
+                        return clib.strdup(entry.name.ptr);
+                },
+
+                else => continue,
+            }
+        } else {
+            dir_iterator = null;
         }
     }
 
