@@ -110,13 +110,6 @@ pub fn main() !void {
             try handleType(argv, buff);
         } else {
             if (try typeBuilt(cmd, buff)) |_| {
-                // var argv = std.ArrayList([]const u8).init(alloc);
-                // defer argv.deinit();
-
-                // for (cmds) |arg| {
-                //     try argv.append(arg);
-                // }
-
                 var res = std.process.Child.init(argv, alloc);
                 res.stdin_behavior = .Inherit;
                 res.stdout_behavior = .Inherit;
@@ -138,11 +131,6 @@ pub fn main() !void {
 
                     try res.spawn();
                 }
-                // defer {
-                //     alloc.free(res.stdout);
-                //     alloc.free(res.stderr);
-                // }
-                // try stdout.print("{s}", .{res.stdout});
                 _ = try res.wait();
             } else {
                 try stdout.print("{s}: command not found\n", .{cmd});
@@ -343,24 +331,6 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     return null;
 }
 
-// fn parseCommand(alloc: std.mem.Allocator, cmd_str: []const u8) ![][]const u8 {
-//     var args = std.ArrayList([]const u8).init(alloc);
-//     errdefer {
-//         for (args.items) |item| {
-//             alloc.free(item);
-//         }
-//         args.deinit();
-//     }
-
-//     var tokens_iter = std.mem.tokenizeScalar(u8, cmd_str, ' ');
-//     while (tokens_iter.next()) |token| {
-//         const arg_copy = try alloc.dupe(u8, token);
-//         try args.append(arg_copy);
-//     }
-
-//     return args.toOwnedSlice();
-// }
-
 fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
     var commands = std.ArrayList([]const u8).init(alloc);
     defer commands.deinit();
@@ -442,24 +412,13 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                     try handleExit();
                 } else if (std.mem.eql(u8, cmd, "cd")) {
                     try handleCd(args);
-                    // const home: []const u8 = "HOME";
-                    // var arg: []const u8 = if (args.len > 1) args[1] else std.posix.getenv(home) orelse "";
-                    // if (std.mem.eql(u8, arg, "~")) {
-                    //     arg = std.posix.getenv(home) orelse "";
-                    // }
-                    // std.posix.chdir(arg) catch {
-                    //     _ = std.io.getStdOut().writer().print("cd: {s}: No such file or directory\n", .{arg}) catch {};
-                    // };
                     std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "pwd")) {
                     const buff = try alloc.alloc(u8, 1024);
                     defer alloc.free(buff);
                     try handlePwd(buff);
-                    // const pwd = try std.process.getCwd(buff);
-                    // _ = std.io.getStdOut().writer().print("{s}\n", .{pwd}) catch {};
                     std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "echo")) {
-                    // try handleEcho(args);
                     if (args.len < 2) std.posix.exit(0);
                     const writer = std.io.getStdOut().writer();
                     for (args[1 .. args.len - 1]) |arg| {
@@ -471,26 +430,6 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                     const buff = try alloc.alloc(u8, 1024);
                     defer alloc.free(buff);
                     try handleType(args, buff);
-                    // var found: bool = false;
-                    // if (args.len < 2) std.posix.exit(0);
-                    // const target = args[1];
-                    // for (builtins) |builtin| {
-                    //     if (std.mem.eql(u8, builtin, target)) {
-                    //         _ = std.io.getStdOut().writer().print("{s} is a shell builtin\n", .{target}) catch {};
-                    //         found = true;
-                    //         break;
-                    //     }
-                    // }
-                    // if (!found) {
-                    //     const buff = try alloc.alloc(u8, 1024);
-                    //     defer alloc.free(buff);
-                    //     if (try typeBuilt(target, buff)) |p| {
-                    //         _ = std.io.getStdOut().writer().print("{s} is {s}\n", .{ target, p }) catch {};
-                    //     } else {
-                    //         _ = std.io.getStdOut().writer().print("{s}: not found\n", .{target}) catch {};
-                    //     }
-                    // }
-                    // std.posix.exit(0);
                 }
                 std.posix.exit(0);
             } else {
