@@ -6,11 +6,11 @@ const clib = @cImport({
     @cInclude("readline/readline.h");
 });
 
+const stdout = std.io.getStdOut().writer();
 const builtins = [_][]const u8{ "exit", "echo", "type", "pwd" };
 
 pub fn main() !void {
     // Uncomment this block to pass the first stage
-    const stdout = std.io.getStdOut().writer();
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
     defer _ = gpa.deinit();
@@ -41,8 +41,6 @@ pub fn main() !void {
             }
             alloc.free(cmds);
         }
-
-        // std.debug.print("{s}\n", .{cmds});
 
         var index: ?usize = null;
         var target: u8 = 1;
@@ -94,25 +92,14 @@ pub fn main() !void {
         defer if (outf) |file| file.close();
         defer if (errf) |file| file.close();
 
-        // std.debug.print("index: {d}\ntarget: {any}\n", .{ index, target });
-
         const cmd = argv[0];
 
         if (std.mem.eql(u8, cmd, "exit")) {
-            std.posix.exit(0);
+            try handleExit();
         } else if (std.mem.eql(u8, cmd, "cd")) {
-            const home: []const u8 = "HOME";
-            var arg: []const u8 = argv[1];
-            if (std.mem.eql(u8, argv[1], "~")) {
-                arg = std.posix.getenv(home) orelse "";
-            }
-            std.posix.chdir(arg) catch {
-                try stdout.print("cd: {s}: No such file or directory\n", .{arg});
-            };
+            try handleCd(argv);
         } else if (std.mem.eql(u8, cmd, "pwd")) {
-            const pwd = try std.process.getCwd(buff);
-
-            try stdout.print("{s}\n", .{pwd});
+            try handlePwd(buff);
         } else if (std.mem.eql(u8, cmd, "echo")) {
             if (argv.len < 2) return;
             for (argv[1 .. argv.len - 1]) |arg| {
@@ -120,22 +107,7 @@ pub fn main() !void {
             }
             try out.print("{s}\n", .{argv[argv.len - 1]});
         } else if (std.mem.eql(u8, cmd, "type")) {
-            var found: bool = false;
-            const args = argv[1];
-            for (builtins) |builtin| {
-                if (std.mem.eql(u8, builtin, args)) {
-                    try stdout.print("{s} is a shell builtin\n", .{args});
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) {
-                if (try typeBuilt(args, buff)) |p| {
-                    try stdout.print("{s} is {s}\n", .{ args, p });
-                } else {
-                    try stdout.print("{s}: not found\n", .{args});
-                }
-            }
+            try handleType(argv, buff);
         } else {
             if (try typeBuilt(cmd, buff)) |_| {
                 // var argv = std.ArrayList([]const u8).init(alloc);
@@ -177,6 +149,54 @@ pub fn main() !void {
             }
         }
     }
+}
+
+fn handleExit() !void {
+    std.posix.exit(0);
+}
+
+// fn handleEcho(argv: [][]const u8) !void {
+//     if (argv.len < 2) return;
+//     for (argv[1 .. argv.len - 1]) |arg| {
+//         try stdout.print("{s} ", .{arg});
+//     }
+//     try stdout.print("{s}\n", .{argv[argv.len - 1]});
+// }
+
+fn handleType(argv: [][]const u8, buff: []u8) !void {
+    var found: bool = false;
+    const args = argv[1];
+    for (builtins) |builtin| {
+        if (std.mem.eql(u8, builtin, args)) {
+            try stdout.print("{s} is a shell builtin\n", .{args});
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        if (try typeBuilt(args, buff)) |p| {
+            try stdout.print("{s} is {s}\n", .{ args, p });
+        } else {
+            try stdout.print("{s}: not found\n", .{args});
+        }
+    }
+}
+
+fn handlePwd(buff: []u8) !void {
+    const pwd = try std.process.getCwd(buff);
+
+    try stdout.print("{s}\n", .{pwd});
+}
+
+fn handleCd(argv: [][]const u8) !void {
+    const home: []const u8 = "HOME";
+    var arg: []const u8 = argv[1];
+    if (std.mem.eql(u8, argv[1], "~")) {
+        arg = std.posix.getenv(home) orelse "";
+    }
+    std.posix.chdir(arg) catch {
+        try stdout.print("cd: {s}: No such file or directory\n", .{arg});
+    };
 }
 
 fn typeBuilt(args: []const u8, buff: []u8) !?[]const u8 {
@@ -323,23 +343,23 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     return null;
 }
 
-fn parseCommand(alloc: std.mem.Allocator, cmd_str: []const u8) ![][]const u8 {
-    var args = std.ArrayList([]const u8).init(alloc);
-    errdefer {
-        for (args.items) |item| {
-            alloc.free(item);
-        }
-        args.deinit();
-    }
+// fn parseCommand(alloc: std.mem.Allocator, cmd_str: []const u8) ![][]const u8 {
+//     var args = std.ArrayList([]const u8).init(alloc);
+//     errdefer {
+//         for (args.items) |item| {
+//             alloc.free(item);
+//         }
+//         args.deinit();
+//     }
 
-    var tokens_iter = std.mem.tokenizeScalar(u8, cmd_str, ' ');
-    while (tokens_iter.next()) |token| {
-        const arg_copy = try alloc.dupe(u8, token);
-        try args.append(arg_copy);
-    }
+//     var tokens_iter = std.mem.tokenizeScalar(u8, cmd_str, ' ');
+//     while (tokens_iter.next()) |token| {
+//         const arg_copy = try alloc.dupe(u8, token);
+//         try args.append(arg_copy);
+//     }
 
-    return args.toOwnedSlice();
-}
+//     return args.toOwnedSlice();
+// }
 
 fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
     var commands = std.ArrayList([]const u8).init(alloc);
@@ -371,75 +391,115 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
     var pids = try alloc.alloc(std.posix.pid_t, commands.items.len);
     defer alloc.free(pids);
 
-    // Create all child processes
     for (commands.items, 0..) |cmd_str, i| {
+        const args = try parse_inp(alloc, cmd_str);
+        defer {
+            for (args) |arg| {
+                alloc.free(arg);
+            }
+            alloc.free(args);
+        }
+
+        if (args.len == 0) continue;
+        const cmd = args[0];
+
+        // Check if this is a builtin command
+        var is_builtin = false;
+        for (builtins) |builtin| {
+            if (std.mem.eql(u8, builtin, cmd)) {
+                is_builtin = true;
+                break;
+            }
+        }
+
+        // Fork a process for both external commands and builtins
+        // This ensures consistent pipeline behavior
         const pid = try std.posix.fork();
 
         if (pid == 0) {
             // Child process
 
-            // Set up pipes
-            if (i == 0) {
-                // First command: close all read ends, and set up stdout
-                for (0..pipes_count) |j| {
-                    if (j != i) {
-                        std.posix.close(pipes[j][1]);
+            // Set up input from previous command if not first command
+            if (i > 0) {
+                try std.posix.dup2(pipes[i - 1][0], std.posix.STDIN_FILENO);
+            }
+
+            // Set up output to next command if not last command
+            if (i < commands.items.len - 1) {
+                try std.posix.dup2(pipes[i][1], std.posix.STDOUT_FILENO);
+            }
+
+            // Close all pipe file descriptors in child
+            for (0..pipes_count) |j| {
+                std.posix.close(pipes[j][0]);
+                std.posix.close(pipes[j][1]);
+            }
+
+            // Execute the command
+            if (is_builtin) {
+                // Handle builtin commands
+                if (std.mem.eql(u8, cmd, "exit")) {
+                    try handleExit();
+                } else if (std.mem.eql(u8, cmd, "cd")) {
+                    try handleCd(args);
+                    // const home: []const u8 = "HOME";
+                    // var arg: []const u8 = if (args.len > 1) args[1] else std.posix.getenv(home) orelse "";
+                    // if (std.mem.eql(u8, arg, "~")) {
+                    //     arg = std.posix.getenv(home) orelse "";
+                    // }
+                    // std.posix.chdir(arg) catch {
+                    //     _ = std.io.getStdOut().writer().print("cd: {s}: No such file or directory\n", .{arg}) catch {};
+                    // };
+                    std.posix.exit(0);
+                } else if (std.mem.eql(u8, cmd, "pwd")) {
+                    const buff = try alloc.alloc(u8, 1024);
+                    defer alloc.free(buff);
+                    try handlePwd(buff);
+                    // const pwd = try std.process.getCwd(buff);
+                    // _ = std.io.getStdOut().writer().print("{s}\n", .{pwd}) catch {};
+                    std.posix.exit(0);
+                } else if (std.mem.eql(u8, cmd, "echo")) {
+                    // try handleEcho(args);
+                    if (args.len < 2) std.posix.exit(0);
+                    const writer = std.io.getStdOut().writer();
+                    for (args[1 .. args.len - 1]) |arg| {
+                        _ = writer.print("{s} ", .{arg}) catch {};
                     }
-                    std.posix.close(pipes[j][0]);
+                    _ = writer.print("{s}\n", .{args[args.len - 1]}) catch {};
+                    std.posix.exit(0);
+                } else if (std.mem.eql(u8, cmd, "type")) {
+                    const buff = try alloc.alloc(u8, 1024);
+                    defer alloc.free(buff);
+                    try handleType(args, buff);
+                    // var found: bool = false;
+                    // if (args.len < 2) std.posix.exit(0);
+                    // const target = args[1];
+                    // for (builtins) |builtin| {
+                    //     if (std.mem.eql(u8, builtin, target)) {
+                    //         _ = std.io.getStdOut().writer().print("{s} is a shell builtin\n", .{target}) catch {};
+                    //         found = true;
+                    //         break;
+                    //     }
+                    // }
+                    // if (!found) {
+                    //     const buff = try alloc.alloc(u8, 1024);
+                    //     defer alloc.free(buff);
+                    //     if (try typeBuilt(target, buff)) |p| {
+                    //         _ = std.io.getStdOut().writer().print("{s} is {s}\n", .{ target, p }) catch {};
+                    //     } else {
+                    //         _ = std.io.getStdOut().writer().print("{s}: not found\n", .{target}) catch {};
+                    //     }
+                    // }
+                    // std.posix.exit(0);
                 }
-
-                // Redirect stdout to write end of pipe
-                std.posix.dup2(pipes[i][1], std.posix.STDOUT_FILENO) catch unreachable;
-                std.posix.close(pipes[i][1]);
-            } else if (i == commands.items.len - 1) {
-                // Last command: close all write ends, set up stdin
-                for (0..pipes_count) |j| {
-                    std.posix.close(pipes[j][1]);
-                    if (j != i - 1) {
-                        std.posix.close(pipes[j][0]);
-                    }
-                }
-
-                // Redirect stdin to read end of previous pipe
-                std.posix.dup2(pipes[i - 1][0], std.posix.STDIN_FILENO) catch unreachable;
-                std.posix.close(pipes[i - 1][0]);
-
-                // stdout is properly directed to terminal
-                std.posix.dup2(std.posix.STDOUT_FILENO, std.posix.STDOUT_FILENO) catch unreachable;
+                std.posix.exit(0);
             } else {
-                // Middle command: set up stdin from previous, stdout to next
-                for (0..pipes_count) |j| {
-                    if (j != i) {
-                        std.posix.close(pipes[j][1]);
-                    }
-                    if (j != i - 1) {
-                        std.posix.close(pipes[j][0]);
-                    }
+                // Execute external command
+                const exec_error = std.process.execv(alloc, args);
+                if (exec_error != error.Success) {
+                    std.debug.print("execv failed for {s}: {}\n", .{ cmd, exec_error });
+                    std.posix.exit(1);
                 }
-
-                // Redirect stdin from previous pipe
-                std.posix.dup2(pipes[i - 1][0], std.posix.STDIN_FILENO) catch unreachable;
-                std.posix.close(pipes[i - 1][0]);
-
-                // Redirect stdout to next pipe
-                std.posix.dup2(pipes[i][1], std.posix.STDOUT_FILENO) catch unreachable;
-                std.posix.close(pipes[i][1]);
-            }
-
-            // Parse and execute the command
-            const args: [][]const u8 = parseCommand(alloc, cmd_str) catch |err| {
-                std.debug.print("Failed to parse command: {}\n", .{err});
-                std.posix.exit(1);
-            };
-
-            if (args.len == 0) {
-                std.posix.exit(1);
-            }
-
-            const exec_error = std.process.execv(alloc, args);
-            if (exec_error != error.Success) {
-                std.debug.print("execv failed: {}\n", .{exec_error});
-                std.posix.exit(1);
             }
         } else {
             // Parent process
