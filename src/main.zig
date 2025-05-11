@@ -30,7 +30,7 @@ pub fn main() !void {
         const user_input: []u8 = line[0..ln_len];
 
         if (std.mem.count(u8, user_input, "|") > 0) {
-            try executePipeCmds(alloc, user_input);
+            try executePipeCmds(alloc, user_input, buff);
             continue;
         }
 
@@ -331,7 +331,7 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     return null;
 }
 
-fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
+fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8) !void {
     var commands = std.ArrayList([]const u8).init(alloc);
     defer commands.deinit();
 
@@ -414,8 +414,8 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                     try handleCd(args);
                     std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "pwd")) {
-                    const buff = try alloc.alloc(u8, 1024);
-                    defer alloc.free(buff);
+                    // const buff = try alloc.alloc(u8, 1024);
+                    // defer alloc.free(buff);
                     try handlePwd(buff);
                     std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "echo")) {
@@ -427,8 +427,8 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8) !void {
                     _ = writer.print("{s}\n", .{args[args.len - 1]}) catch {};
                     std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "type")) {
-                    const buff = try alloc.alloc(u8, 1024);
-                    defer alloc.free(buff);
+                    // const buff = try alloc.alloc(u8, 1024);
+                    // defer alloc.free(buff);
                     try handleType(args, buff);
                 }
                 std.posix.exit(0);
