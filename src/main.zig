@@ -262,24 +262,19 @@ fn completion(text: [*c]const u8, start: c_int, _: c_int) callconv(.c) [*c][*c]u
 
 var completion_index: usize = undefined;
 var text_len: usize = undefined;
-var completion_path: ?[]const u8 = null; // To be assigned the value of $PATH
+var completion_path: ?[]const u8 = null;
 var path_iterator: ?std.mem.TokenIterator(u8, .scalar) = null;
 var dir_iterator: ?std.fs.Dir.Iterator = null;
-var iteration: enum {
-    None,
-    Builtins,
-    Path,
-} = .None;
+var Builtins = true;
 fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     if (state == 0) {
         completion_index = 0;
         text_len = std.mem.len(text);
-        iteration = .Builtins;
     }
 
     const txt = text[0..text_len];
 
-    if (iteration == .Builtins) {
+    if (Builtins) {
         while (completion_index < builtins.len) {
             const builtin_name = builtins[completion_index];
             completion_index += 1;
@@ -288,16 +283,11 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
                 return clib.strdup(builtin_name.ptr);
             }
         }
-        if (completion_path == null) {
-            iteration = .None;
-        } else {
-            iteration = .Path;
-
-            path_iterator = std.mem.tokenizeScalar(u8, completion_path.?, ':');
-        }
+        Builtins = false;
+        path_iterator = std.mem.tokenizeScalar(u8, completion_path.?, ':');
     }
 
-    again: while (iteration == .Path) {
+    again: while (!Builtins) {
         if (dir_iterator == null) {
             if (path_iterator.?.next()) |path| {
                 var buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -306,10 +296,8 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
                 dir_iterator = dir.iterate();
                 continue :again;
             } else {
-                iteration = .None;
-
+                Builtins = true;
                 path_iterator = null;
-
                 break :again;
             }
         }
@@ -317,8 +305,9 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
         while (dir_iterator.?.next() catch unreachable) |entry| {
             switch (entry.kind) {
                 .file => {
-                    if (std.mem.startsWith(u8, entry.name, txt))
+                    if (std.mem.startsWith(u8, entry.name, txt)) {
                         return clib.strdup(entry.name.ptr);
+                    }
                 },
 
                 else => continue,
@@ -414,8 +403,6 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8) !void 
                     try handleCd(args);
                     std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "pwd")) {
-                    // const buff = try alloc.alloc(u8, 1024);
-                    // defer alloc.free(buff);
                     try handlePwd(buff);
                     std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "echo")) {
@@ -427,8 +414,6 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8) !void 
                     _ = writer.print("{s}\n", .{args[args.len - 1]}) catch {};
                     std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "type")) {
-                    // const buff = try alloc.alloc(u8, 1024);
-                    // defer alloc.free(buff);
                     try handleType(args, buff);
                 }
                 std.posix.exit(0);
