@@ -10,7 +10,6 @@ const stdout = std.io.getStdOut().writer();
 const builtins = [_][]const u8{ "exit", "echo", "type", "pwd" };
 
 pub fn main() !void {
-    // Uncomment this block to pass the first stage
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     const alloc = gpa.allocator();
     defer _ = gpa.deinit();
@@ -22,8 +21,6 @@ pub fn main() !void {
     clib.rl_attempted_completion_function = &completion;
 
     while (true) {
-        // try stdout.print("$ ", .{});
-        // const stdin = std.io.getStdIn().reader();
         const line = clib.readline("$ ");
         defer clib.free(line);
         const ln_len = std.mem.len(line);
@@ -143,14 +140,6 @@ fn handleExit() !void {
     std.posix.exit(0);
 }
 
-// fn handleEcho(argv: [][]const u8) !void {
-//     if (argv.len < 2) return;
-//     for (argv[1 .. argv.len - 1]) |arg| {
-//         try stdout.print("{s} ", .{arg});
-//     }
-//     try stdout.print("{s}\n", .{argv[argv.len - 1]});
-// }
-
 fn handleType(argv: [][]const u8, buff: []u8) !void {
     var found: bool = false;
     const args = argv[1];
@@ -266,6 +255,7 @@ var completion_path: ?[]const u8 = null;
 var path_iterator: ?std.mem.TokenIterator(u8, .scalar) = null;
 var dir_iterator: ?std.fs.Dir.Iterator = null;
 var Builtins = true;
+
 fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     if (state == 0) {
         completion_index = 0;
@@ -401,18 +391,14 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8) !void 
                     try handleExit();
                 } else if (std.mem.eql(u8, cmd, "cd")) {
                     try handleCd(args);
-                    std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "pwd")) {
                     try handlePwd(buff);
-                    std.posix.exit(0);
                 } else if (std.mem.eql(u8, cmd, "echo")) {
                     if (args.len < 2) std.posix.exit(0);
-                    const writer = std.io.getStdOut().writer();
                     for (args[1 .. args.len - 1]) |arg| {
-                        _ = writer.print("{s} ", .{arg}) catch {};
+                        _ = stdout.print("{s} ", .{arg}) catch {};
                     }
-                    _ = writer.print("{s}\n", .{args[args.len - 1]}) catch {};
-                    std.posix.exit(0);
+                    _ = stdout.print("{s}\n", .{args[args.len - 1]}) catch {};
                 } else if (std.mem.eql(u8, cmd, "type")) {
                     try handleType(args, buff);
                 }
