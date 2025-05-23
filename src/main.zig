@@ -3,11 +3,13 @@ const clib = @cImport({
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
     @cInclude("string.h");
+    @cInclude("readline/history.h");
     @cInclude("readline/readline.h");
 });
 
+const hst_path: []const u8 = ".shell_history";
 const stdout = std.io.getStdOut().writer();
-const builtins = [_][]const u8{ "exit", "echo", "type", "pwd" };
+const builtins = [_][]const u8{ "exit", "echo", "type", "pwd", "history" };
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -17,6 +19,17 @@ pub fn main() !void {
     const buff = try alloc.alloc(u8, 1024);
     defer alloc.free(buff);
 
+    std.posix.access(hst_path, std.posix.F_OK) catch {
+        const file = try std.fs.cwd().createFile(hst_path, .{ .read = true });
+        defer file.close();
+    };
+
+    clib.using_history();
+    _ = clib.read_history(".shell_history");
+    defer {
+        clib.clear_history();
+    }
+
     completion_path = std.posix.getenv("PATH");
     clib.rl_attempted_completion_function = &completion;
 
@@ -25,6 +38,8 @@ pub fn main() !void {
         defer clib.free(line);
         const ln_len = std.mem.len(line);
         const user_input: []u8 = line[0..ln_len];
+        clib.add_history(line);
+        _ = clib.write_history(".shell_history");
 
         if (std.mem.count(u8, user_input, "|") > 0) {
             try executePipeCmds(alloc, user_input, buff);
