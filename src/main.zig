@@ -25,7 +25,6 @@ pub fn main() !void {
     };
 
     clib.using_history();
-    _ = clib.read_history(".shell_history");
     defer {
         clib.clear_history();
     }
