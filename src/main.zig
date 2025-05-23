@@ -159,8 +159,6 @@ fn handleExit() !void {
 
 fn handleHistory(args: [][]const u8) !void {
     const hst_len: c_int = clib.history_length;
-    // var start_idx: c_int = 1;
-    // const end_idx: c_int = hst_len;
 
     if (args.len > 1) {
         const limit = std.fmt.parseInt(c_int, args[1], 10) catch {
