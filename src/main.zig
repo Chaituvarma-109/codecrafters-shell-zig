@@ -120,6 +120,8 @@ pub fn main() !void {
             try out.print("{s}\n", .{argv[argv.len - 1]});
         } else if (std.mem.eql(u8, cmd, "type")) {
             try handleType(argv, buff);
+        } else if (std.mem.eql(u8, cmd, "history")) {
+            try handleHistory(argv);
         } else {
             if (try typeBuilt(cmd, buff)) |_| {
                 var res = std.process.Child.init(argv, alloc);
@@ -153,6 +155,44 @@ pub fn main() !void {
 
 fn handleExit() !void {
     std.posix.exit(0);
+}
+
+fn handleHistory(args: [][]const u8) !void {
+    const hst_len: c_int = clib.history_length;
+    // var start_idx: c_int = 1;
+    // const end_idx: c_int = hst_len;
+
+    if (args.len > 1) {
+        const limit = std.fmt.parseInt(c_int, args[1], 10) catch {
+            try stdout.print("history: {s}: numeric argument required\n", .{args[1]});
+            return;
+        };
+
+        if (limit <= 0) return;
+        const start_idx = @max(1, hst_len - limit + 1);
+
+        var i: c_int = start_idx;
+        while (i <= hst_len) : (i += 1) {
+            const entry = clib.history_get(i);
+            if (entry != null) {
+                const line = entry.*.line;
+                if (line != null) {
+                    try stdout.print("{d:>5}  {s}\n", .{ @as(u32, @intCast(i)), line });
+                }
+            }
+        }
+    } else {
+        var i: c_int = 0;
+        while (i <= hst_len) : (i += 1) {
+            const entry = clib.history_get(i);
+            if (entry != null) {
+                const line = entry.*.line;
+                if (line != null) {
+                    try stdout.print("{d:>5}  {s}\n", .{ @as(u32, @intCast(i)), line });
+                }
+            }
+        }
+    }
 }
 
 fn handleType(argv: [][]const u8, buff: []u8) !void {

@@ -19,3 +19,5 @@ bin/
 
 src/temp.zig
 src/t.c
+.idea/
+.shell_history
