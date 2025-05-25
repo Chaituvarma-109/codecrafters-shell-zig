@@ -10,6 +10,13 @@ const clib = @cImport({
 const hst_path: []const u8 = ".shell_history";
 const stdout = std.io.getStdOut().writer();
 const builtins = [_][]const u8{ "exit", "echo", "type", "pwd", "history" };
+var completion_path: ?[]const u8 = null;
+var paths_arr: std.ArrayList([]const u8) = undefined;
+var completion_index: usize = undefined;
+var text_len: usize = undefined;
+var Builtins = true;
+var dir_iterator: ?std.fs.Dir.Iterator = null;
+var path_index: usize = 0;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -29,8 +36,16 @@ pub fn main() !void {
         clib.clear_history();
     }
 
-    completion_path = std.posix.getenv("PATH");
     clib.rl_attempted_completion_function = &completion;
+
+    completion_path = std.posix.getenv("PATH");
+    paths_arr = .init(alloc);
+    defer paths_arr.deinit();
+    var paths_iter = std.mem.tokenizeAny(u8, completion_path.?, ":");
+    while (paths_iter.next()) |path| {
+        const path_copy = try alloc.dupe(u8, path);
+        try paths_arr.append(path_copy);
+    }
 
     while (true) {
         const line = clib.readline("$ ");
@@ -229,11 +244,8 @@ fn handleCd(argv: [][]const u8) !void {
 }
 
 fn typeBuilt(args: []const u8, buff: []u8) !?[]const u8 {
-    const env_path = std.posix.getenv("PATH");
-    var folders = std.mem.tokenizeAny(u8, env_path.?, ":");
-
-    while (folders.next()) |folder| {
-        const full_path = try std.fmt.bufPrint(buff, "{s}/{s}", .{ folder, args });
+    for (paths_arr.items) |path| {
+        const full_path = try std.fmt.bufPrint(buff, "{s}/{s}", .{ path, args });
         std.fs.accessAbsolute(full_path, .{ .mode = .read_only }) catch continue;
         return full_path;
     }
@@ -301,17 +313,13 @@ fn completion(text: [*c]const u8, start: c_int, _: c_int) callconv(.c) [*c][*c]u
     return matches;
 }
 
-var completion_index: usize = undefined;
-var text_len: usize = undefined;
-var completion_path: ?[]const u8 = null;
-var path_iterator: ?std.mem.TokenIterator(u8, .scalar) = null;
-var dir_iterator: ?std.fs.Dir.Iterator = null;
-var Builtins = true;
-
 fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
     if (state == 0) {
         completion_index = 0;
         text_len = std.mem.len(text);
+        Builtins = true;
+        dir_iterator = null;
+        path_index = 0;
     }
 
     const txt = text[0..text_len];
@@ -326,36 +334,37 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
             }
         }
         Builtins = false;
-        path_iterator = std.mem.tokenizeScalar(u8, completion_path.?, ':');
+        completion_index = 0;
     }
 
-    again: while (!Builtins) {
+    // Search through PATH directories
+    while (!Builtins) {
+        // If no directory is currently being searched, open the next one
         if (dir_iterator == null) {
-            if (path_iterator.?.next()) |path| {
-                var buf: [std.fs.max_path_bytes]u8 = undefined;
-                const p = std.fs.realpath(path, &buf) catch continue :again;
-                const dir = std.fs.openDirAbsolute(p, .{ .iterate = true }) catch continue :again;
+            if (path_index < paths_arr.items.len) {
+                const path = paths_arr.items[path_index];
+                path_index += 1;
+
+                const dir = std.fs.openDirAbsolute(path, .{ .iterate = true }) catch continue; // Skip invalid directories and try next
                 dir_iterator = dir.iterate();
-                continue :again;
             } else {
-                Builtins = true;
-                path_iterator = null;
-                break :again;
+                break; // No more directories to search
             }
         }
 
-        while (dir_iterator.?.next() catch unreachable) |entry| {
-            switch (entry.kind) {
-                .file => {
-                    if (std.mem.startsWith(u8, entry.name, txt)) {
-                        return clib.strdup(entry.name.ptr);
-                    }
-                },
-
-                else => continue,
+        // Search current directory for matching files
+        if (dir_iterator) |*iter| {
+            while (iter.next() catch null) |entry| {
+                switch (entry.kind) {
+                    .file => {
+                        if (std.mem.startsWith(u8, entry.name, txt)) {
+                            return clib.strdup(entry.name.ptr);
+                        }
+                    },
+                    else => continue,
+                }
             }
-        } else {
-            dir_iterator = null;
+            dir_iterator = null; // Finished with this directory, move to next
         }
     }
 
