@@ -7,7 +7,6 @@ const clib = @cImport({
     @cInclude("readline/readline.h");
 });
 
-const hst_path: []const u8 = ".shell_history";
 const stdout = std.io.getStdOut().writer();
 const builtins = [_][]const u8{ "exit", "echo", "type", "pwd", "history" };
 var completion_path: ?[]const u8 = null;
@@ -25,6 +24,10 @@ pub fn main() !void {
 
     const buff = try alloc.alloc(u8, 1024);
     defer alloc.free(buff);
+
+    const home = std.posix.getenv("HOME");
+    const home_path = try alloc.dupe(u8, home.?);
+    const hst_path = try std.fs.path.join(alloc, &.{ home_path, ".shell_history" });
 
     std.posix.access(hst_path, std.posix.F_OK) catch {
         const file = try std.fs.cwd().createFile(hst_path, .{ .read = true });
@@ -53,7 +56,7 @@ pub fn main() !void {
         const ln_len = std.mem.len(line);
         const user_input: []u8 = line[0..ln_len];
         clib.add_history(line);
-        _ = clib.write_history(".shell_history");
+        _ = clib.write_history(hst_path.ptr);
 
         if (std.mem.count(u8, user_input, "|") > 0) {
             try executePipeCmds(alloc, user_input, buff);
