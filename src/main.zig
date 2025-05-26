@@ -10,6 +10,7 @@ const clib = @cImport({
 const stdout = std.io.getStdOut().writer();
 const builtins = [_][]const u8{ "exit", "echo", "type", "pwd", "history" };
 var completion_path: ?[]const u8 = null;
+var home: ?[]const u8 = null;
 var paths_arr: std.ArrayList([]const u8) = undefined;
 var completion_index: usize = undefined;
 var text_len: usize = undefined;
@@ -25,19 +26,17 @@ pub fn main() !void {
     const buff = try alloc.alloc(u8, 1024);
     defer alloc.free(buff);
 
-    const home = std.posix.getenv("HOME");
+    home = std.posix.getenv("HOME");
     const home_path = try alloc.dupe(u8, home.?);
     const hst_path = try std.fs.path.join(alloc, &.{ home_path, ".shell_history" });
 
     std.posix.access(hst_path, std.posix.F_OK) catch {
         const file = try std.fs.cwd().createFile(hst_path, .{ .read = true });
-        defer file.close();
+        file.close();
     };
 
     clib.using_history();
-    defer {
-        clib.clear_history();
-    }
+    defer clib.clear_history();
 
     clib.rl_attempted_completion_function = &completion;
 
@@ -186,25 +185,22 @@ fn handleHistory(args: [][]const u8) !void {
         if (limit <= 0) return;
         const start_idx = @max(1, hst_len - limit + 1);
 
-        var i: c_int = start_idx;
-        while (i <= hst_len) : (i += 1) {
-            const entry = clib.history_get(i);
-            if (entry != null) {
-                const line = entry.*.line;
-                if (line != null) {
-                    try stdout.print("{d:>5}  {s}\n", .{ @as(u32, @intCast(i)), line });
-                }
-            }
-        }
+        const i: c_int = start_idx;
+        try loopHistory(i, hst_len);
     } else {
-        var i: c_int = 0;
-        while (i <= hst_len) : (i += 1) {
-            const entry = clib.history_get(i);
-            if (entry != null) {
-                const line = entry.*.line;
-                if (line != null) {
-                    try stdout.print("{d:>5}  {s}\n", .{ @as(u32, @intCast(i)), line });
-                }
+        const i: c_int = 0;
+        try loopHistory(i, hst_len);
+    }
+}
+
+fn loopHistory(i: c_int, hst_len: c_int) !void {
+    var j = i;
+    while (j <= hst_len) : (j += 1) {
+        const entry = clib.history_get(j);
+        if (entry != null) {
+            const line = entry.*.line;
+            if (line != null) {
+                try stdout.print("{d:>5}  {s}\n", .{ @as(u32, @intCast(j)), line });
             }
         }
     }
@@ -236,10 +232,9 @@ fn handlePwd(buff: []u8) !void {
 }
 
 fn handleCd(argv: [][]const u8) !void {
-    const home: []const u8 = "HOME";
     var arg: []const u8 = argv[1];
     if (std.mem.eql(u8, argv[1], "~")) {
-        arg = std.posix.getenv(home) orelse "";
+        arg = home orelse "";
     }
     std.posix.chdir(arg) catch {
         try stdout.print("cd: {s}: No such file or directory\n", .{arg});
@@ -325,7 +320,7 @@ fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
         path_index = 0;
     }
 
-    const txt = text[0..text_len];
+    const txt: []const u8 = text[0..text_len];
 
     if (Builtins) {
         while (completion_index < builtins.len) {
