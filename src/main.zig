@@ -28,7 +28,9 @@ pub fn main() !void {
 
     home = std.posix.getenv("HOME");
     const home_path = try alloc.dupe(u8, home.?);
+    defer alloc.free(home_path);
     const hst_path = try std.fs.path.join(alloc, &.{ home_path, ".shell_history" });
+    defer alloc.free(hst_path);
 
     std.posix.access(hst_path, std.posix.F_OK) catch {
         const file = try std.fs.cwd().createFile(hst_path, .{ .read = true });
