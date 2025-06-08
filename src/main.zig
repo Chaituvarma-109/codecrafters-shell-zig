@@ -11,6 +11,7 @@ const stdout = std.io.getStdOut().writer();
 const builtins = [_][]const u8{ "exit", "echo", "type", "pwd", "history" };
 var completion_path: ?[]const u8 = null;
 var home: ?[]const u8 = null;
+var histfile: ?[]const u8 = null;
 var paths_arr: std.ArrayList([]const u8) = undefined;
 var completion_index: usize = undefined;
 var text_len: usize = undefined;
@@ -28,9 +29,12 @@ pub fn main() !void {
     defer alloc.free(buff);
 
     home = std.posix.getenv("HOME");
+    histfile = std.posix.getenv("HISTFILE");
 
     clib.using_history();
-    _ = clib.read_history(std.posix.getenv("HISTFILE") orelse "");
+    if (histfile) |file| {
+        _ = clib.read_history(file);
+    }
     defer clib.clear_history();
 
     clib.rl_attempted_completion_function = &completion;
@@ -182,7 +186,9 @@ pub fn main() !void {
 }
 
 fn handleExit() !void {
-    _ = clib.write_history(std.posix.getenv("HISTFILE") orelse "");
+    if (histfile) |file| {
+        _ = clib.write_history(file);
+    }
     std.posix.exit(0);
 }
 
