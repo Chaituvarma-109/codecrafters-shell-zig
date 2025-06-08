@@ -33,7 +33,7 @@ pub fn main() !void {
 
     clib.using_history();
     if (histfile) |file| {
-        _ = clib.read_history(file);
+        _ = clib.read_history(file.ptr);
     }
     defer clib.clear_history();
 
@@ -187,7 +187,7 @@ pub fn main() !void {
 
 fn handleExit() !void {
     if (histfile) |file| {
-        _ = clib.write_history(file);
+        _ = clib.write_history(file.ptr);
     }
     std.posix.exit(0);
 }
