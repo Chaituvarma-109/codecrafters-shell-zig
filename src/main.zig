@@ -27,15 +27,6 @@ pub fn main() !void {
     defer alloc.free(buff);
 
     home = std.posix.getenv("HOME");
-    const home_path = try alloc.dupe(u8, home.?);
-    defer alloc.free(home_path);
-    const hst_path = try std.fs.path.join(alloc, &.{ home_path, ".shell_history" });
-    defer alloc.free(hst_path);
-
-    std.posix.access(hst_path, std.posix.F_OK) catch {
-        const file = try std.fs.cwd().createFile(hst_path, .{ .read = true });
-        file.close();
-    };
 
     clib.using_history();
     defer clib.clear_history();
@@ -57,7 +48,6 @@ pub fn main() !void {
         const ln_len = std.mem.len(line);
         const user_input: []u8 = line[0..ln_len];
         clib.add_history(line);
-        _ = clib.write_history(hst_path.ptr);
 
         if (std.mem.count(u8, user_input, "|") > 0) {
             try executePipeCmds(alloc, user_input, buff);
@@ -139,7 +129,24 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, cmd, "type")) {
             try handleType(argv, buff);
         } else if (std.mem.eql(u8, cmd, "history")) {
-            try handleHistory(argv);
+            if (argv.len == 3) {
+                const hist_arg = argv[1];
+                const hist_path = argv[2];
+                if (std.mem.eql(u8, hist_arg, "-r")) {
+                    _ = clib.read_history(hist_path.ptr);
+                } else if (std.mem.eql(u8, hist_arg, "-w")) {
+                    std.posix.access(hist_path, std.posix.F_OK) catch {
+                        const file = try std.fs.cwd().createFile(hist_path, .{ .read = true });
+                        file.close();
+                    };
+                    _ = clib.write_history(hist_path.ptr);
+                }
+                // else if (std.mem.eql(u8, hist_arg, "-a")) {
+                //     _ = clib.append_history(hist_path.ptr);
+                // }
+            } else {
+                try handleHistory(argv);
+            }
         } else {
             if (try typeBuilt(cmd, buff)) |_| {
                 var res = std.process.Child.init(argv, alloc);
