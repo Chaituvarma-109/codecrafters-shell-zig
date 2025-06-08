@@ -135,25 +135,7 @@ pub fn main() !void {
         } else if (std.mem.eql(u8, cmd, "type")) {
             try handleType(argv, buff);
         } else if (std.mem.eql(u8, cmd, "history")) {
-            if (argv.len == 3) {
-                const hist_len: c_int = clib.history_length;
-                const hist_arg = argv[1];
-                const hist_path = argv[2];
-                if (std.mem.eql(u8, hist_arg, "-r")) {
-                    _ = clib.read_history(hist_path.ptr);
-                } else if (std.mem.eql(u8, hist_arg, "-w")) {
-                    std.posix.access(hist_path, std.posix.F_OK) catch {
-                        const file = try std.fs.cwd().createFile(hist_path, .{ .read = true });
-                        file.close();
-                    };
-                    _ = clib.write_history(hist_path.ptr);
-                } else if (std.mem.eql(u8, hist_arg, "-a")) {
-                    _ = clib.append_history(hist_len - hist_save, hist_path.ptr);
-                    hist_save = hist_len;
-                }
-            } else {
-                try handleHistory(argv);
-            }
+            try handleHistory(argv);
         } else {
             if (try typeBuilt(cmd, buff)) |_| {
                 var res = std.process.Child.init(argv, alloc);
@@ -195,7 +177,22 @@ fn handleExit() !void {
 fn handleHistory(args: [][]const u8) !void {
     const hst_len: c_int = clib.history_length;
 
-    if (args.len > 1) {
+    if (args.len == 3) {
+        const hist_arg = args[1];
+        const hist_path = args[2];
+        if (std.mem.eql(u8, hist_arg, "-r")) {
+            _ = clib.read_history(hist_path.ptr);
+        } else if (std.mem.eql(u8, hist_arg, "-w")) {
+            std.posix.access(hist_path, std.posix.F_OK) catch {
+                const file = try std.fs.cwd().createFile(hist_path, .{ .read = true });
+                file.close();
+            };
+            _ = clib.write_history(hist_path.ptr);
+        } else if (std.mem.eql(u8, hist_arg, "-a")) {
+            _ = clib.append_history(hst_len - hist_save, hist_path.ptr);
+            hist_save = hst_len;
+        }
+    } else if (args.len == 2) {
         const limit = std.fmt.parseInt(c_int, args[1], 10) catch {
             try stdout.print("history: {s}: numeric argument required\n", .{args[1]});
             return;
