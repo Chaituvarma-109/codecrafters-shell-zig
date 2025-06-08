@@ -17,6 +17,7 @@ var text_len: usize = undefined;
 var Builtins = true;
 var dir_iterator: ?std.fs.Dir.Iterator = null;
 var path_index: usize = 0;
+var hist_save: i32 = 0;
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -29,6 +30,7 @@ pub fn main() !void {
     home = std.posix.getenv("HOME");
 
     clib.using_history();
+    _ = clib.read_history(std.posix.getenv("HISTFILE") orelse "");
     defer clib.clear_history();
 
     clib.rl_attempted_completion_function = &completion;
@@ -130,6 +132,7 @@ pub fn main() !void {
             try handleType(argv, buff);
         } else if (std.mem.eql(u8, cmd, "history")) {
             if (argv.len == 3) {
+                const hist_len: c_int = clib.history_length;
                 const hist_arg = argv[1];
                 const hist_path = argv[2];
                 if (std.mem.eql(u8, hist_arg, "-r")) {
@@ -140,10 +143,10 @@ pub fn main() !void {
                         file.close();
                     };
                     _ = clib.write_history(hist_path.ptr);
+                } else if (std.mem.eql(u8, hist_arg, "-a")) {
+                    _ = clib.append_history(hist_len - hist_save, hist_path.ptr);
+                    hist_save = hist_len;
                 }
-                // else if (std.mem.eql(u8, hist_arg, "-a")) {
-                //     _ = clib.append_history(hist_path.ptr);
-                // }
             } else {
                 try handleHistory(argv);
             }
@@ -179,6 +182,7 @@ pub fn main() !void {
 }
 
 fn handleExit() !void {
+    _ = clib.write_history(std.posix.getenv("HISTFILE") orelse "");
     std.posix.exit(0);
 }
 
