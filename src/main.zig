@@ -1,407 +1,235 @@
-const std = @import("std");
-const clib = @cImport({
-    @cInclude("stdio.h");
-    @cInclude("stdlib.h");
-    @cInclude("string.h");
-    @cInclude("readline/history.h");
-    @cInclude("readline/readline.h");
-});
+const std: type = @import("std");
+const rdln: type = @import("readline.zig");
+const consts: type = @import("consts.zig");
 
-const stdout = std.io.getStdOut().writer();
-const builtins = [_][]const u8{ "exit", "echo", "type", "pwd", "history" };
+const builtins = consts.builtins;
 var completion_path: ?[]const u8 = null;
 var home: ?[]const u8 = null;
 var histfile: ?[]const u8 = null;
 var paths_arr: std.ArrayList([]const u8) = undefined;
-var completion_index: usize = undefined;
-var text_len: usize = undefined;
-var Builtins = true;
-var dir_iterator: ?std.fs.Dir.Iterator = null;
-var path_index: usize = 0;
-var hist_save: i32 = 0;
+var last_written_idx: usize = 0;
+
+const ParsedRedirect: type = struct {
+    index: usize,
+    fd_target: u8,
+    filename: []const u8,
+    append: bool,
+
+    fn parsedredirect(cmds: [][]const u8) !?ParsedRedirect {
+        for (cmds, 0..) |cm, i| {
+            if (std.mem.eql(u8, cm, ">") or std.mem.eql(u8, cm, "1>")) {
+                if (i + 1 >= cmds.len) return null;
+                return ParsedRedirect{
+                    .index = i,
+                    .fd_target = 1,
+                    .filename = cmds[i + 1],
+                    .append = false,
+                };
+            }
+            if (std.mem.eql(u8, cm, "2>")) {
+                if (i + 1 >= cmds.len) return null;
+                return ParsedRedirect{
+                    .index = i,
+                    .fd_target = 2,
+                    .filename = cmds[i + 1],
+                    .append = false,
+                };
+            }
+            if (std.mem.eql(u8, cm, ">>") or std.mem.eql(u8, cm, "1>>")) {
+                if (i + 1 >= cmds.len) return null;
+                return ParsedRedirect{
+                    .index = i,
+                    .fd_target = 1,
+                    .filename = cmds[i + 1],
+                    .append = true,
+                };
+            }
+            if (std.mem.eql(u8, cm, "2>>")) {
+                if (i + 1 >= cmds.len) return null;
+                return ParsedRedirect{
+                    .index = i,
+                    .fd_target = 2,
+                    .filename = cmds[i + 1],
+                    .append = true,
+                };
+            }
+        }
+
+        return null;
+    }
+};
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    const alloc = gpa.allocator();
-    defer _ = gpa.deinit();
+    var gpa: std.heap.DebugAllocator(.{}) = .init;
+    const alloc: std.mem.Allocator = gpa.allocator();
+    defer {
+        const chk: std.heap.Check = gpa.deinit();
+        if (chk == .leak) std.debug.print("memory leaked\n", .{});
+    }
 
-    const buff = try alloc.alloc(u8, 1024);
+    const buff: []u8 = try alloc.alloc(u8, 1024);
     defer alloc.free(buff);
 
-    home = std.posix.getenv("HOME");
-    histfile = std.posix.getenv("HISTFILE");
-
-    clib.using_history();
-    if (histfile) |file| {
-        _ = clib.read_history(file.ptr);
-    }
-    defer clib.clear_history();
-
-    clib.rl_attempted_completion_function = &completion;
+    var wbuf: [1024]u8 = undefined;
+    const stdout_f = std.fs.File.stdout();
+    var stdout_writer = stdout_f.writerStreaming(&wbuf);
+    const stdout = &stdout_writer.interface;
 
     completion_path = std.posix.getenv("PATH");
-    paths_arr = .init(alloc);
-    defer paths_arr.deinit();
+    home = std.posix.getenv("HOME");
+
+    paths_arr = .empty;
+    defer {
+        for (paths_arr.items) |path| {
+            alloc.free(path);
+        }
+        paths_arr.deinit(alloc);
+    }
     var paths_iter = std.mem.tokenizeAny(u8, completion_path.?, ":");
     while (paths_iter.next()) |path| {
-        const path_copy = try alloc.dupe(u8, path);
-        try paths_arr.append(path_copy);
+        const path_copy: []u8 = try alloc.dupe(u8, path);
+        errdefer alloc.free(path_copy);
+        try paths_arr.append(alloc, path_copy);
     }
 
-    while (true) {
-        const line = clib.readline("$ ");
-        defer clib.free(line);
-        const ln_len = std.mem.len(line);
-        const user_input: []u8 = line[0..ln_len];
-        clib.add_history(line);
+    histfile = std.posix.getenv("HISTFILE");
 
-        if (std.mem.count(u8, user_input, "|") > 0) {
-            try executePipeCmds(alloc, user_input, buff);
+    var hst_arr: std.ArrayList([]u8) = .empty;
+    defer {
+        for (hst_arr.items) |value| {
+            alloc.free(value);
+        }
+        hst_arr.deinit(alloc);
+    }
+
+    if (histfile) |file| {
+        try readHistory(alloc, file, &hst_arr);
+    }
+
+    std.debug.print("$ ", .{});
+    while (true) {
+        const ln: []const u8 = try rdln.readline(alloc, hst_arr) orelse unreachable;
+        defer alloc.free(ln);
+
+        const line: []u8 = try alloc.dupe(u8, ln);
+        try hst_arr.append(alloc, line);
+
+        if (std.mem.count(u8, ln, "|") > 0) {
+            try executePipeCmds(alloc, ln, buff, stdout, &hst_arr);
+            try stdout.print("$ ", .{});
+            try stdout.flush();
             continue;
         }
 
-        const cmds = try parse_inp(alloc, user_input);
+        const parsed_cmds: [][]const u8 = try parseInp(alloc, ln); // { echo, Hello Maria, 1>, /tmp/foo/baz.md }
         defer {
-            for (cmds) |cmd| {
+            for (parsed_cmds) |cmd| {
                 alloc.free(cmd);
             }
-            alloc.free(cmds);
+            alloc.free(parsed_cmds);
         }
 
-        var index: ?usize = null;
-        var target: u8 = 1;
-        var append = false;
-
-        for (cmds, 0..) |cm, i| {
-            if (std.mem.eql(u8, cm, ">") or std.mem.eql(u8, cm, "1>") or std.mem.eql(u8, cm, "2>")) {
-                index = i;
-                if (cm.len == 2) {
-                    target = cm[0] - '0';
-                }
-                break;
-            }
-
-            if (std.mem.eql(u8, cm, ">>") or std.mem.eql(u8, cm, "1>>") or std.mem.eql(u8, cm, "2>>")) {
-                append = true;
-                index = i;
-                if (cm.len == 3) {
-                    target = cm[0] - '0';
-                }
-                break;
-            }
+        const redirect: ?ParsedRedirect = try .parsedredirect(parsed_cmds);
+        const argv: [][]const u8 = if (redirect) |r| parsed_cmds[0..r.index] else parsed_cmds;
+        if (argv.len == 0) {
+            try stdout.print("$ ", .{});
+            try stdout.flush();
+            continue;
         }
 
-        var outf: ?std.fs.File = null;
-        var errf: ?std.fs.File = null;
-        var out = stdout;
-        var argv = cmds;
+        const cmd: []const u8 = argv[0];
 
-        if (index) |ind| {
-            argv = cmds[0..ind];
-            if (target == 1) {
-                outf = try std.fs.cwd().createFile(cmds[ind + 1], .{ .truncate = !append });
-
-                if (outf) |file| {
-                    if (append) try file.seekFromEnd(0);
-
-                    out = file.writer();
-                }
-            } else {
-                errf = try std.fs.cwd().createFile(cmds[ind + 1], .{ .truncate = !append });
-
-                if (errf) |file| {
-                    if (append) try file.seekFromEnd(0);
-                }
-            }
-        }
-
-        defer if (outf) |file| file.close();
-        defer if (errf) |file| file.close();
-
-        const cmd = argv[0];
-
-        if (std.mem.eql(u8, cmd, "exit")) {
-            try handleExit();
-        } else if (std.mem.eql(u8, cmd, "cd")) {
-            try handleCd(argv);
-        } else if (std.mem.eql(u8, cmd, "pwd")) {
-            try handlePwd(buff);
-        } else if (std.mem.eql(u8, cmd, "echo")) {
-            if (argv.len < 2) return;
-            for (argv[1 .. argv.len - 1]) |arg| {
-                try out.print("{s} ", .{arg});
-            }
-            try out.print("{s}\n", .{argv[argv.len - 1]});
-        } else if (std.mem.eql(u8, cmd, "type")) {
-            try handleType(argv, buff);
-        } else if (std.mem.eql(u8, cmd, "history")) {
-            try handleHistory(argv);
+        if (redirect) |redir| {
+            try executeWithRedirection(alloc, cmd, argv, redir, buff, stdout, &hst_arr);
         } else {
-            if (try typeBuilt(cmd, buff)) |_| {
-                var res = std.process.Child.init(argv, alloc);
-                res.stdin_behavior = .Inherit;
-                res.stdout_behavior = .Inherit;
-                res.stderr_behavior = .Inherit;
+            const is_builtin: bool = try checkbuiltIn(cmd);
 
-                if (outf) |file| {
-                    res.stdout_behavior = .Pipe;
-                    try res.spawn();
-
-                    try file.writeFileAllUnseekable(res.stdout.?, .{});
-                } else if (errf) |file| {
-                    res.stderr_behavior = .Pipe;
-
-                    try res.spawn();
-
-                    try file.writeFileAllUnseekable(res.stderr.?, .{});
-                } else {
+            if (is_builtin) {
+                try executeBuiltin(alloc, cmd, argv, buff, stdout, &hst_arr);
+            } else {
+                if (try typeBuilt(cmd, buff, false)) |_| {
+                    var res = std.process.Child.init(argv, alloc);
+                    res.stdin_behavior = .Inherit;
                     res.stdout_behavior = .Inherit;
-
+                    res.stderr_behavior = .Inherit;
                     try res.spawn();
+                    _ = try res.wait();
+                } else {
+                    try stdout.print("{s}: command not found\n", .{cmd});
+                    try stdout.flush();
                 }
-                _ = try res.wait();
-            } else {
-                try stdout.print("{s}: command not found\n", .{cmd});
             }
         }
+
+        try stdout.print("$ ", .{});
+        try stdout.flush();
     }
 }
 
-fn handleExit() !void {
-    if (histfile) |file| {
-        _ = clib.write_history(file.ptr);
-    }
-    std.posix.exit(0);
-}
-
-fn handleHistory(args: [][]const u8) !void {
-    const hst_len: c_int = clib.history_length;
-
-    if (args.len == 3) {
-        const hist_arg = args[1];
-        const hist_path = args[2];
-        if (std.mem.eql(u8, hist_arg, "-r")) {
-            _ = clib.read_history(hist_path.ptr);
-        } else if (std.mem.eql(u8, hist_arg, "-w")) {
-            std.posix.access(hist_path, std.posix.F_OK) catch {
-                const file = try std.fs.cwd().createFile(hist_path, .{ .read = true });
-                file.close();
-            };
-            _ = clib.write_history(hist_path.ptr);
-        } else if (std.mem.eql(u8, hist_arg, "-a")) {
-            _ = clib.append_history(hst_len - hist_save, hist_path.ptr);
-            hist_save = hst_len;
-        }
-    } else if (args.len == 2) {
-        const limit = std.fmt.parseInt(c_int, args[1], 10) catch {
-            try stdout.print("history: {s}: numeric argument required\n", .{args[1]});
-            return;
-        };
-
-        if (limit <= 0) return;
-        const start_idx = @max(1, hst_len - limit + 1);
-
-        const i: c_int = start_idx;
-        try loopHistory(i, hst_len);
-    } else {
-        const i: c_int = 0;
-        try loopHistory(i, hst_len);
-    }
-}
-
-fn loopHistory(i: c_int, hst_len: c_int) !void {
-    var j = i;
-    while (j <= hst_len) : (j += 1) {
-        const entry = clib.history_get(j);
-        if (entry != null) {
-            const line = entry.*.line;
-            if (line != null) {
-                try stdout.print("{d:>5}  {s}\n", .{ @as(u32, @intCast(j)), line });
-            }
-        }
-    }
-}
-
-fn handleType(argv: [][]const u8, buff: []u8) !void {
-    var found: bool = false;
-    const args = argv[1];
-    for (builtins) |builtin| {
-        if (std.mem.eql(u8, builtin, args)) {
-            try stdout.print("{s} is a shell builtin\n", .{args});
-            found = true;
-            break;
-        }
-    }
-    if (!found) {
-        if (try typeBuilt(args, buff)) |p| {
-            try stdout.print("{s} is {s}\n", .{ args, p });
-        } else {
-            try stdout.print("{s}: not found\n", .{args});
-        }
-    }
-}
-
-fn handlePwd(buff: []u8) !void {
-    const pwd = try std.process.getCwd(buff);
-
-    try stdout.print("{s}\n", .{pwd});
-}
-
-fn handleCd(argv: [][]const u8) !void {
-    var arg: []const u8 = argv[1];
-    if (std.mem.eql(u8, argv[1], "~")) {
-        arg = home orelse "";
-    }
-    std.posix.chdir(arg) catch {
-        try stdout.print("cd: {s}: No such file or directory\n", .{arg});
-    };
-}
-
-fn typeBuilt(args: []const u8, buff: []u8) !?[]const u8 {
-    for (paths_arr.items) |path| {
-        const full_path = try std.fmt.bufPrint(buff, "{s}/{s}", .{ path, args });
-        std.fs.accessAbsolute(full_path, .{ .mode = .read_only }) catch continue;
-        return full_path;
-    }
-
-    return null;
-}
-
-fn parse_inp(alloc: std.mem.Allocator, args: []const u8) ![][]const u8 {
-    var tokens = std.ArrayList([]const u8).init(alloc);
-    defer tokens.deinit();
+fn parseInp(alloc: std.mem.Allocator, inp: []const u8) ![][]const u8 {
+    var tokens: std.ArrayList([]const u8) = .empty;
+    defer tokens.deinit(alloc);
 
     var pos: usize = 0;
-    while (pos < args.len) {
-        if (args[pos] == ' ') {
+
+    while (pos < inp.len) {
+        if (inp[pos] == ' ') {
             pos += 1;
             continue;
         }
 
-        var token = std.ArrayList(u8).init(alloc);
-        defer token.deinit();
-        while (pos < args.len and args[pos] != ' ') {
-            switch (args[pos]) {
+        var token: std.ArrayList(u8) = .empty;
+        defer token.deinit(alloc);
+        while (pos < inp.len and inp[pos] != ' ') {
+            switch (inp[pos]) {
                 '\'', '"' => {
-                    const quote = args[pos];
+                    const quote = inp[pos];
                     pos += 1;
 
-                    while (args[pos] != quote) {
-                        if (quote == '"' and args[pos] == '\\' and switch (args[pos + 1]) {
+                    while (inp[pos] != quote) {
+                        if (quote == '"' and inp[pos] == '\\' and switch (inp[pos + 1]) {
                             '"', '\\', '$', '\n' => true,
                             else => false,
                         }) {
                             pos += 1;
                         }
-                        try token.append(args[pos]);
+                        try token.append(alloc, inp[pos]);
                         pos += 1;
                     }
-                    if (pos < args.len) pos += 1;
+                    if (pos < inp.len) pos += 1;
                 },
-
                 '\\' => {
-                    try token.append(args[pos + 1]);
+                    try token.append(alloc, inp[pos + 1]);
                     pos += 2;
                 },
-
                 else => {
-                    try token.append(args[pos]);
+                    try token.append(alloc, inp[pos]);
                     pos += 1;
                 },
             }
         }
         if (token.items.len > 0) {
-            try tokens.append(try token.toOwnedSlice());
+            try tokens.append(alloc, try token.toOwnedSlice(alloc));
         }
     }
 
-    return try tokens.toOwnedSlice();
+    return tokens.toOwnedSlice(alloc);
 }
 
-fn completion(text: [*c]const u8, start: c_int, _: c_int) callconv(.c) [*c][*c]u8 {
-    var matches: [*c][*c]u8 = null;
-
-    if (start == 0) {
-        matches = clib.rl_completion_matches(text, &custom_completion);
-    }
-    return matches;
-}
-
-fn custom_completion(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
-    if (state == 0) {
-        completion_index = 0;
-        text_len = std.mem.len(text);
-        Builtins = true;
-        dir_iterator = null;
-        path_index = 0;
-    }
-
-    const txt: []const u8 = text[0..text_len];
-
-    if (Builtins) {
-        while (completion_index < builtins.len) {
-            const builtin_name = builtins[completion_index];
-            completion_index += 1;
-
-            if (std.mem.startsWith(u8, builtin_name, txt)) {
-                return clib.strdup(builtin_name.ptr);
-            }
-        }
-        Builtins = false;
-        completion_index = 0;
-    }
-
-    // Search through PATH directories
-    while (!Builtins) {
-        // If no directory is currently being searched, open the next one
-        if (dir_iterator == null) {
-            if (path_index < paths_arr.items.len) {
-                const path = paths_arr.items[path_index];
-                path_index += 1;
-
-                const dir = std.fs.openDirAbsolute(path, .{ .iterate = true }) catch continue; // Skip invalid directories and try next
-                dir_iterator = dir.iterate();
-            } else {
-                break; // No more directories to search
-            }
-        }
-
-        // Search current directory for matching files
-        if (dir_iterator) |*iter| {
-            while (iter.next() catch null) |entry| {
-                switch (entry.kind) {
-                    .file => {
-                        if (std.mem.startsWith(u8, entry.name, txt)) {
-                            return clib.strdup(entry.name.ptr);
-                        }
-                    },
-                    else => continue,
-                }
-            }
-            dir_iterator = null; // Finished with this directory, move to next
-        }
-    }
-
-    return null;
-}
-
-fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8) !void {
-    var commands = std.ArrayList([]const u8).init(alloc);
-    defer commands.deinit();
+fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8, stdout: *std.Io.Writer, hst_arr: *std.ArrayList([]u8)) !void {
+    var commands: std.ArrayList([]const u8) = .empty;
+    defer commands.deinit(alloc);
 
     var cmd_iter = std.mem.splitScalar(u8, inp, '|');
     while (cmd_iter.next()) |cmd| {
-        const trimmed_cmd = std.mem.trim(u8, cmd, " \t\r\n");
-        try commands.append(trimmed_cmd);
+        const trimmed_cmd: []const u8 = std.mem.trim(u8, cmd, " \t\r\n");
+        try commands.append(alloc, trimmed_cmd);
     }
 
     if (commands.items.len == 0) return;
 
-    // try restoreDefaultSignalHandlers();
-    // defer setupSignalHandlers() catch {};
-
     // Multiple commands with pipes
-    const pipes_count = commands.items.len - 1;
+    const pipes_count: usize = commands.items.len - 1;
     var pipes = try alloc.alloc([2]std.posix.fd_t, pipes_count);
     defer alloc.free(pipes);
 
@@ -416,7 +244,8 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8) !void 
     defer alloc.free(pids);
 
     for (commands.items, 0..) |cmd_str, i| {
-        const args = try parse_inp(alloc, cmd_str);
+        // changed from parseCommand to parseInp function.
+        const args: [][]const u8 = try parseInp(alloc, cmd_str);
         defer {
             for (args) |arg| {
                 alloc.free(arg);
@@ -425,16 +254,10 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8) !void 
         }
 
         if (args.len == 0) continue;
-        const cmd = args[0];
+        const cmd: []const u8 = args[0];
 
         // Check if this is a builtin command
-        var is_builtin = false;
-        for (builtins) |builtin| {
-            if (std.mem.eql(u8, builtin, cmd)) {
-                is_builtin = true;
-                break;
-            }
-        }
+        const is_builtin: bool = try checkbuiltIn(cmd);
 
         // Fork a process for both external commands and builtins
         // This ensures consistent pipeline behavior
@@ -459,24 +282,11 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8) !void 
                 std.posix.close(pipes[j][1]);
             }
 
-            // Execute the command
+            // Execute the builtin commands
             if (is_builtin) {
-                // Handle builtin commands
-                if (std.mem.eql(u8, cmd, "exit")) {
-                    try handleExit();
-                } else if (std.mem.eql(u8, cmd, "cd")) {
-                    try handleCd(args);
-                } else if (std.mem.eql(u8, cmd, "pwd")) {
-                    try handlePwd(buff);
-                } else if (std.mem.eql(u8, cmd, "echo")) {
-                    if (args.len < 2) std.posix.exit(0);
-                    for (args[1 .. args.len - 1]) |arg| {
-                        _ = stdout.print("{s} ", .{arg}) catch {};
-                    }
-                    _ = stdout.print("{s}\n", .{args[args.len - 1]}) catch {};
-                } else if (std.mem.eql(u8, cmd, "type")) {
-                    try handleType(args, buff);
-                }
+                try executeBuiltin(alloc, cmd, args, buff, stdout, hst_arr);
+
+                try stdout.flush();
                 std.posix.exit(0);
             } else {
                 // Execute external command
@@ -502,4 +312,246 @@ fn executePipeCmds(alloc: std.mem.Allocator, inp: []const u8, buff: []u8) !void 
     for (pids) |pid| {
         _ = std.posix.waitpid(pid, 0);
     }
+}
+
+fn checkbuiltIn(cmd: []const u8) !bool {
+    for (builtins) |builtin| {
+        if (std.mem.eql(u8, builtin, cmd)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn executeWithRedirection(alloc: std.mem.Allocator, cmd: []const u8, argv: [][]const u8, redir: ParsedRedirect, buff: []u8, stdout: *std.Io.Writer, hst_arr: *std.ArrayList([]u8)) !void {
+    // Create directory if needed
+    if (std.fs.path.dirname(redir.filename)) |dir| {
+        std.fs.cwd().makePath(dir) catch |err| {
+            if (err != error.PathAlreadyExists) {
+                return;
+            }
+        };
+    }
+
+    // Open file with appropriate flags
+    const flags: std.posix.O = if (redir.append)
+        .{ .ACCMODE = .WRONLY, .CREAT = true, .APPEND = true }
+    else
+        .{ .ACCMODE = .WRONLY, .CREAT = true, .TRUNC = true };
+
+    const fd = std.posix.open(redir.filename, flags, 0o666) catch |err| {
+        try stdout.print("Failed to open {s}: {}\n", .{ redir.filename, err });
+        try stdout.flush();
+        return;
+    };
+    defer std.posix.close(fd);
+
+    // Check if it's a builtin
+    const is_builtin: bool = try checkbuiltIn(cmd);
+
+    const pid = try std.posix.fork();
+
+    if (is_builtin) {
+        // For builtins, use fork to redirect output
+        if (pid == 0) {
+            // Child process
+            if (redir.fd_target == 1) {
+                try std.posix.dup2(fd, std.posix.STDOUT_FILENO);
+            } else {
+                try std.posix.dup2(fd, std.posix.STDERR_FILENO);
+            }
+
+            executeBuiltin(alloc, cmd, argv, buff, stdout, hst_arr) catch {};
+            std.posix.exit(0);
+        } else {
+            // Parent process
+            _ = std.posix.waitpid(pid, 0);
+        }
+    } else {
+        // For external commands, use fork + exec
+        _ = try typeBuilt(cmd, buff, true) orelse {
+            try stdout.print("{s}: command not found\n", .{cmd});
+            try stdout.flush();
+            return;
+        };
+
+        if (pid == 0) {
+            // Child process
+            if (redir.fd_target == 1) {
+                try std.posix.dup2(fd, std.posix.STDOUT_FILENO);
+            } else {
+                try std.posix.dup2(fd, std.posix.STDERR_FILENO);
+            }
+
+            const exec_error: std.process.ExecvError = std.process.execv(alloc, argv);
+            try stdout.print("execv failed: {}\n", .{exec_error});
+            try stdout.flush();
+            std.posix.exit(1);
+        } else {
+            // Parent process
+            _ = std.posix.waitpid(pid, 0);
+        }
+    }
+    try stdout.flush();
+}
+
+fn executeBuiltin(alloc: std.mem.Allocator, cmd: []const u8, argv: [][]const u8, buff: []u8, stdout: *std.Io.Writer, hst_lst: *std.ArrayList([]u8)) !void {
+    const append = false;
+    if (std.mem.eql(u8, cmd, "exit")) {
+        if (histfile) |file| {
+            try writeHistory(file, hst_lst, append);
+        }
+        try handleExit();
+    } else if (std.mem.eql(u8, cmd, "cd")) {
+        try handleCd(argv, stdout);
+    } else if (std.mem.eql(u8, cmd, "pwd")) {
+        try handlePwd(stdout);
+    } else if (std.mem.eql(u8, cmd, "echo")) {
+        try handleEcho(argv, stdout);
+    } else if (std.mem.eql(u8, cmd, "type")) {
+        try handleType(buff, argv, stdout);
+    } else if (std.mem.eql(u8, cmd, "history")) {
+        if (argv.len == 3) {
+            const arg = argv[1];
+            const val = argv[2];
+
+            if (std.mem.eql(u8, arg, "-r")) {
+                // Read history from a file.
+                try readHistory(alloc, val, hst_lst);
+            } else if (std.mem.eql(u8, arg, "-w")) {
+                // Write history to file.
+                try writeHistory(val, hst_lst, append);
+            } else if (std.mem.eql(u8, arg, "-a")) {
+                // append history to a file.
+                try writeHistory(val, hst_lst, !append);
+            }
+        } else {
+            try handleHistory(argv, stdout, hst_lst);
+        }
+    }
+}
+
+fn typeBuilt(args: []const u8, buff: []u8, only_exec: bool) !?[]const u8 {
+    for (paths_arr.items) |path| {
+        const full_path: []u8 = try std.fmt.bufPrint(buff, "{s}/{s}", .{ path, args });
+
+        if (only_exec) {
+            std.posix.faccessat(std.os.linux.AT.FDCWD, full_path, std.os.linux.X_OK, 0) catch continue;
+            return full_path;
+        } else {
+            std.fs.accessAbsolute(full_path, .{}) catch continue;
+            return full_path;
+        }
+    }
+
+    return null;
+}
+
+fn handleExit() !void {
+    std.posix.exit(0);
+}
+
+fn handleCd(argv: [][]const u8, stdout: *std.Io.Writer) !void {
+    var arg: []const u8 = argv[1];
+    if (std.mem.eql(u8, argv[1], "~")) {
+        arg = home orelse "";
+    }
+    std.posix.chdir(arg) catch {
+        try stdout.print("{s}: No such file or directory\n", .{arg});
+    };
+
+    try stdout.flush();
+}
+
+fn handlePwd(stdout: *std.Io.Writer) !void {
+    var buff: [std.fs.max_path_bytes]u8 = undefined;
+    const cwd: []u8 = try std.process.getCwd(&buff);
+    try stdout.print("{s}\n", .{cwd});
+    try stdout.flush();
+}
+
+fn handleEcho(argv: [][]const u8, stdout: *std.Io.Writer) !void {
+    if (argv.len < 2) return;
+    for (argv[1 .. argv.len - 1]) |arg| {
+        try stdout.print("{s} ", .{arg});
+    }
+    try stdout.print("{s}\n", .{argv[argv.len - 1]});
+    try stdout.flush();
+}
+
+fn handleType(buff: []u8, argv: [][]const u8, stdout: *std.Io.Writer) !void {
+    var found: bool = false;
+    const cmd: []const u8 = argv[1];
+    for (builtins) |builtin| {
+        if (std.mem.eql(u8, builtin, cmd)) {
+            try stdout.print("{s} is a shell builtin\n", .{cmd});
+            found = true;
+            break;
+        }
+    }
+    if (!found) {
+        if (try typeBuilt(cmd, buff, true)) |p| {
+            try stdout.print("{s} is {s}\n", .{ cmd, p });
+        } else {
+            try stdout.print("{s}: not found\n", .{cmd});
+        }
+    }
+
+    try stdout.flush();
+}
+
+fn handleHistory(argv: [][]const u8, stdout: *std.Io.Writer, hst_arr: *std.ArrayList([]u8)) !void {
+    var limit: usize = 1000;
+    const hst_len = hst_arr.items.len;
+    if (argv.len > 1) {
+        limit = @intCast(try std.fmt.parseInt(u32, argv[1], 10));
+    }
+    const start_idx = @max(0, hst_len - @min(limit, hst_len));
+
+    for (hst_arr.items[start_idx..], start_idx + 0..) |value, i| {
+        try stdout.print("{d:>5}  {s}\n", .{ i, value });
+    }
+    try stdout.flush();
+}
+
+fn readHistory(alloc: std.mem.Allocator, hst_file_path: []const u8, hst_lst: *std.ArrayList([]u8)) !void {
+    const bytes = try std.fs.cwd().readFileAlloc(alloc, hst_file_path, std.math.maxInt(usize));
+    defer alloc.free(bytes);
+
+    var bytes_iter = std.mem.splitScalar(u8, bytes, '\n');
+
+    while (bytes_iter.next()) |val| {
+        if (val.len == 0) continue;
+        const val_dup = try alloc.dupe(u8, val);
+        hst_lst.append(alloc, val_dup) catch {
+            alloc.free(val_dup);
+            continue;
+        };
+    }
+}
+
+fn writeHistory(hst_file_path: []const u8, hst_lst: *std.ArrayList([]u8), append: bool) !void {
+    const f = try std.fs.cwd().createFile(hst_file_path, .{ .truncate = !append });
+    defer f.close();
+
+    if (append) try f.seekFromEnd(0);
+
+    var buff: [1024]u8 = undefined;
+    var wr = f.writerStreaming(&buff);
+
+    if (append) {
+        for (hst_lst.items[last_written_idx..]) |value| {
+            try wr.interface.writeAll(value);
+            try wr.interface.writeAll("\n");
+        }
+    } else {
+        for (hst_lst.items) |value| {
+            try wr.interface.writeAll(value);
+            try wr.interface.writeAll("\n");
+        }
+    }
+
+    try wr.interface.flush();
+
+    last_written_idx = hst_lst.items.len;
 }
