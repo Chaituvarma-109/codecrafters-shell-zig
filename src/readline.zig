@@ -103,59 +103,55 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
     const infile = try std.fs.cwd().openFile("/dev/tty", .{ .mode = .read_write });
     defer infile.close();
 
+    var buff: [1]u8 = undefined;
+    var fr = infile.reader(&buff);
+    const r = &fr.interface;
+
     const term = try enableRawMode(infile);
     defer disableRawMode(infile, term) catch {};
 
-    var buff: [1]u8 = undefined;
     var tab_count: usize = 0;
     var arr: usize = 0;
 
     while (true) {
-        const n: usize = try infile.read(&buff);
-        if (n == 0) return null;
-
-        const char: u8 = buff[0];
+        const char: u8 = try r.takeByte();
 
         switch (char) {
-            std.ascii.control_code.esc => {
-                var buf: [2]u8 = undefined;
-                _ = try infile.read(&buf);
-                switch (buf[0]) {
-                    '[' => {
-                        switch (buf[1]) {
-                            'A' => {
-                                if (arr < hst_lst.items.len) {
-                                    for (line_buff.items) |_| {
-                                        try stdout.writeAll("\x08 \x08");
-                                    }
+            '[' => {
+                const ch = try r.takeByte();
+                switch (ch) {
+                    'A' => {
+                        if (arr < hst_lst.items.len) {
+                            for (line_buff.items) |_| {
+                                try stdout.writeAll("\x08 \x08");
+                            }
 
-                                    line_buff.clearRetainingCapacity();
+                            line_buff.clearRetainingCapacity();
 
-                                    const index: usize = hst_lst.items.len - arr - 1;
-                                    try stdout.writeAll(hst_lst.items[index]);
+                            const index: usize = hst_lst.items.len - arr - 1;
+                            try stdout.writeAll(" ");
+                            try stdout.writeAll(hst_lst.items[index]);
 
-                                    try line_buff.appendSlice(alloc, hst_lst.items[index]);
-                                    arr += 1;
-                                }
-                            },
-                            'B' => {
-                                if (arr > 0) {
-                                    for (line_buff.items) |_| {
-                                        try stdout.writeAll("\x08 \x08");
-                                    }
+                            try line_buff.appendSlice(alloc, hst_lst.items[index]);
+                            arr += 1;
+                        }
+                    },
+                    'B' => {
+                        if (arr > 0) {
+                            for (line_buff.items) |_| {
+                                try stdout.writeAll("\x08 \x08");
+                            }
 
-                                    line_buff.clearRetainingCapacity();
-                                    arr -= 1;
+                            line_buff.clearRetainingCapacity();
+                            arr -= 1;
 
-                                    if (arr > 0) {
-                                        const index: usize = hst_lst.items.len - arr;
-                                        try stdout.writeAll(hst_lst.items[index]);
+                            if (arr > 0) {
+                                const index: usize = hst_lst.items.len - arr;
+                                try stdout.writeAll(" ");
+                                try stdout.writeAll(hst_lst.items[index]);
 
-                                        try line_buff.appendSlice(alloc, hst_lst.items[index]);
-                                    }
-                                }
-                            },
-                            else => {},
+                                try line_buff.appendSlice(alloc, hst_lst.items[index]);
+                            }
                         }
                     },
                     else => {},
@@ -234,7 +230,7 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
                 }
                 tab_count = 0;
             },
-            32...126 => {
+            32...90, 92...126 => {
                 try line_buff.append(alloc, char);
                 try stdout.writeAll(&[_]u8{char});
 
