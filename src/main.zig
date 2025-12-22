@@ -106,8 +106,10 @@ pub fn main() !void {
         try readHistory(alloc, file, &hst_arr);
     }
 
-    std.debug.print("$ ", .{});
     while (true) {
+        try stdout.print("$ ", .{});
+        try stdout.flush();
+
         const ln: []const u8 = try rdln.readline(alloc, hst_arr) orelse unreachable;
         defer alloc.free(ln);
 
@@ -116,8 +118,6 @@ pub fn main() !void {
 
         if (std.mem.count(u8, ln, "|") > 0) {
             try executePipeCmds(alloc, ln, buff, stdout, &hst_arr);
-            try stdout.print("$ ", .{});
-            try stdout.flush();
             continue;
         }
 
@@ -131,11 +131,6 @@ pub fn main() !void {
 
         const redirect: ?ParsedRedirect = try .parsedredirect(parsed_cmds);
         const argv: [][]const u8 = if (redirect) |r| parsed_cmds[0..r.index] else parsed_cmds;
-        if (argv.len == 0) {
-            try stdout.print("$ ", .{});
-            try stdout.flush();
-            continue;
-        }
 
         const cmd: []const u8 = argv[0];
 
@@ -160,9 +155,6 @@ pub fn main() !void {
                 }
             }
         }
-
-        try stdout.print("$ ", .{});
-        try stdout.flush();
     }
 }
 
