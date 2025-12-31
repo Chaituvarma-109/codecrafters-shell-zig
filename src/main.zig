@@ -2,7 +2,7 @@ const std: type = @import("std");
 const rdln: type = @import("readline.zig");
 const consts: type = @import("consts.zig");
 
-const builtins = consts.builtins;
+const builtins: [6][]const u8 = consts.builtins;
 var completion_path: ?[]const u8 = null;
 var home: ?[]const u8 = null;
 var histfile: ?[]const u8 = null;
@@ -17,8 +17,8 @@ const ParsedRedirect: type = struct {
 
     fn parsedredirect(cmds: [][]const u8) !?ParsedRedirect {
         for (cmds, 0..) |cm, i| {
+            if (i + 1 >= cmds.len) return null;
             if (std.mem.eql(u8, cm, ">") or std.mem.eql(u8, cm, "1>")) {
-                if (i + 1 >= cmds.len) return null;
                 return ParsedRedirect{
                     .index = i,
                     .fd_target = 1,
@@ -27,7 +27,6 @@ const ParsedRedirect: type = struct {
                 };
             }
             if (std.mem.eql(u8, cm, "2>")) {
-                if (i + 1 >= cmds.len) return null;
                 return ParsedRedirect{
                     .index = i,
                     .fd_target = 2,
@@ -36,7 +35,6 @@ const ParsedRedirect: type = struct {
                 };
             }
             if (std.mem.eql(u8, cm, ">>") or std.mem.eql(u8, cm, "1>>")) {
-                if (i + 1 >= cmds.len) return null;
                 return ParsedRedirect{
                     .index = i,
                     .fd_target = 1,
@@ -45,7 +43,6 @@ const ParsedRedirect: type = struct {
                 };
             }
             if (std.mem.eql(u8, cm, "2>>")) {
-                if (i + 1 >= cmds.len) return null;
                 return ParsedRedirect{
                     .index = i,
                     .fd_target = 2,
@@ -107,10 +104,7 @@ pub fn main() !void {
     }
 
     while (true) {
-        try stdout.print("$ ", .{});
-        try stdout.flush();
-
-        const ln: []const u8 = try rdln.readline(alloc, hst_arr) orelse unreachable;
+        const ln: []const u8 = try rdln.readline(alloc, hst_arr, "$ ") orelse unreachable;
         defer alloc.free(ln);
 
         const line: []u8 = try alloc.dupe(u8, ln);
@@ -175,7 +169,7 @@ fn parseInp(alloc: std.mem.Allocator, inp: []const u8) ![][]const u8 {
         while (pos < inp.len and inp[pos] != ' ') {
             switch (inp[pos]) {
                 '\'', '"' => {
-                    const quote = inp[pos];
+                    const quote: u8 = inp[pos];
                     pos += 1;
 
                     while (inp[pos] != quote) {
@@ -393,19 +387,28 @@ fn executeBuiltin(alloc: std.mem.Allocator, cmd: []const u8, argv: [][]const u8,
         if (histfile) |file| {
             try writeHistory(file, hst_lst, append);
         }
-        try handleExit();
+        std.posix.exit(0);
     } else if (std.mem.eql(u8, cmd, "cd")) {
-        try handleCd(argv, stdout);
+        var arg: []const u8 = argv[1];
+        if (std.mem.eql(u8, argv[1], "~")) arg = home orelse "";
+
+        std.posix.chdir(arg) catch {
+            try stdout.print("{s}: No such file or directory\n", .{arg});
+            try stdout.flush();
+        };
     } else if (std.mem.eql(u8, cmd, "pwd")) {
-        try handlePwd(stdout);
+        var pbuff: [std.fs.max_path_bytes]u8 = undefined;
+        const cwd: []u8 = try std.process.getCwd(&pbuff);
+        try stdout.print("{s}\n", .{cwd});
+        try stdout.flush();
     } else if (std.mem.eql(u8, cmd, "echo")) {
         try handleEcho(argv, stdout);
     } else if (std.mem.eql(u8, cmd, "type")) {
         try handleType(buff, argv, stdout);
     } else if (std.mem.eql(u8, cmd, "history")) {
         if (argv.len == 3) {
-            const arg = argv[1];
-            const val = argv[2];
+            const arg: []const u8 = argv[1];
+            const val: []const u8 = argv[2];
 
             if (std.mem.eql(u8, arg, "-r")) {
                 // Read history from a file.
@@ -437,29 +440,6 @@ fn typeBuilt(args: []const u8, buff: []u8, only_exec: bool) !?[]const u8 {
     }
 
     return null;
-}
-
-fn handleExit() !void {
-    std.posix.exit(0);
-}
-
-fn handleCd(argv: [][]const u8, stdout: *std.Io.Writer) !void {
-    var arg: []const u8 = argv[1];
-    if (std.mem.eql(u8, argv[1], "~")) {
-        arg = home orelse "";
-    }
-    std.posix.chdir(arg) catch {
-        try stdout.print("{s}: No such file or directory\n", .{arg});
-    };
-
-    try stdout.flush();
-}
-
-fn handlePwd(stdout: *std.Io.Writer) !void {
-    var buff: [std.fs.max_path_bytes]u8 = undefined;
-    const cwd: []u8 = try std.process.getCwd(&buff);
-    try stdout.print("{s}\n", .{cwd});
-    try stdout.flush();
 }
 
 fn handleEcho(argv: [][]const u8, stdout: *std.Io.Writer) !void {
@@ -531,16 +511,11 @@ fn writeHistory(hst_file_path: []const u8, hst_lst: *std.ArrayList([]u8), append
     var buff: [1024]u8 = undefined;
     var wr = f.writerStreaming(&buff);
 
-    if (append) {
-        for (hst_lst.items[last_written_idx..]) |value| {
-            try wr.interface.writeAll(value);
-            try wr.interface.writeAll("\n");
-        }
-    } else {
-        for (hst_lst.items) |value| {
-            try wr.interface.writeAll(value);
-            try wr.interface.writeAll("\n");
-        }
+    const idx: usize = if (append) last_written_idx else 0;
+
+    for (hst_lst.items[idx..]) |value| {
+        try wr.interface.writeAll(value);
+        try wr.interface.writeAll("\n");
     }
 
     try wr.interface.flush();

@@ -1,7 +1,7 @@
 const std: type = @import("std");
 const consts: type = @import("consts.zig");
 
-const builtins = consts.builtins;
+const builtins: [6][]const u8 = consts.builtins;
 
 fn enableRawMode(stdin: std.fs.File) !std.posix.termios {
     const orig_term = try std.posix.tcgetattr(stdin.handle);
@@ -94,9 +94,7 @@ fn longestCommonPrefix(matches: [][]const u8) []const u8 {
     return first[0..prefix_len];
 }
 
-pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]const u8 {
-    const stdout = std.fs.File.stdout();
-
+pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8), prompt: []const u8) !?[]const u8 {
     var line_buff: std.ArrayList(u8) = .empty;
     errdefer line_buff.deinit(alloc);
 
@@ -107,18 +105,25 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
     var fr = infile.reader(&buff);
     const r = &fr.interface;
 
+    var wbuff: [1024]u8 = undefined;
+    var fwr = infile.writer(&wbuff);
+    const stdout = &fwr.interface;
+
     const term = try enableRawMode(infile);
     defer disableRawMode(infile, term) catch {};
 
     var tab_count: usize = 0;
     var arr: usize = 0;
 
+    try stdout.writeAll(prompt);
+    try stdout.flush();
+
     while (true) {
         const char: u8 = try r.takeByte();
 
         switch (char) {
             '[' => {
-                const ch = try r.takeByte();
+                const ch: u8 = try r.takeByte();
                 switch (ch) {
                     'A' => {
                         if (arr < hst_lst.items.len) {
@@ -131,6 +136,7 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
                             const index: usize = hst_lst.items.len - arr - 1;
                             try stdout.writeAll(" ");
                             try stdout.writeAll(hst_lst.items[index]);
+                            try stdout.flush();
 
                             try line_buff.appendSlice(alloc, hst_lst.items[index]);
                             arr += 1;
@@ -152,6 +158,8 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
 
                                 try line_buff.appendSlice(alloc, hst_lst.items[index]);
                             }
+
+                            try stdout.flush();
                         }
                     },
                     else => {},
@@ -159,6 +167,7 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
             },
             std.ascii.control_code.lf, std.ascii.control_code.cr => {
                 try stdout.writeAll("\n");
+                try stdout.flush();
                 return try line_buff.toOwnedSlice(alloc);
             },
             std.ascii.control_code.ht => {
@@ -174,12 +183,16 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
                 }
 
                 switch (matches.items.len) {
-                    0 => try stdout.writeAll("\x07"),
+                    0 => {
+                        try stdout.writeAll("\x07");
+                        try stdout.flush();
+                    },
                     1 => {
                         const rem: []const u8 = matches.items[0];
 
                         try stdout.writeAll(rem[partials.len..]);
                         try stdout.writeAll(" ");
+                        try stdout.flush();
 
                         try line_buff.appendSlice(alloc, rem[partials.len..]);
                         try line_buff.append(alloc, ' ');
@@ -192,12 +205,14 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
                             const remaining: []const u8 = lcp[partials.len..];
 
                             try stdout.writeAll(remaining);
+                            try stdout.flush();
 
                             try line_buff.appendSlice(alloc, remaining);
                             tab_count = 0;
                         } else {
                             if (tab_count == 1) {
                                 try stdout.writeAll("\x07");
+                                try stdout.flush();
                             } else if (tab_count >= 2) {
                                 std.mem.sort([]const u8, matches.items, {}, struct {
                                     fn lessThan(_: void, a: []const u8, b: []const u8) bool {
@@ -214,8 +229,9 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
                                     }
                                 }
 
-                                try stdout.writeAll("\n$ ");
+                                try stdout.print("\n{s}", .{prompt});
                                 try stdout.writeAll(partials);
+                                try stdout.flush();
 
                                 tab_count = 0;
                             }
@@ -227,12 +243,14 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8)) !?[]cons
                 if (line_buff.items.len > 0) {
                     _ = line_buff.pop();
                     try stdout.writeAll("\x08 \x08");
+                    try stdout.flush();
                 }
                 tab_count = 0;
             },
             32...90, 92...126 => {
                 try line_buff.append(alloc, char);
                 try stdout.writeAll(&[_]u8{char});
+                try stdout.flush();
 
                 tab_count = 0;
             },
