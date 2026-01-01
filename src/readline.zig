@@ -1,28 +1,33 @@
 const std: type = @import("std");
+
+const mem: type = std.mem;
+const posix: type = std.posix;
+const fs: type = std.fs;
+
 const consts: type = @import("consts.zig");
 
 const builtins: [6][]const u8 = consts.builtins;
 
-fn enableRawMode(stdin: std.fs.File) !std.posix.termios {
-    const orig_term = try std.posix.tcgetattr(stdin.handle);
+fn enableRawMode(stdin: fs.File) !posix.termios {
+    const orig_term = try posix.tcgetattr(stdin.handle);
     var raw = orig_term;
 
     raw.lflag.ECHO = false;
     raw.lflag.ICANON = false;
 
-    raw.cc[@intFromEnum(std.posix.V.MIN)] = 1;
-    raw.cc[@intFromEnum(std.posix.V.TIME)] = 0;
+    raw.cc[@intFromEnum(posix.V.MIN)] = 1;
+    raw.cc[@intFromEnum(posix.V.TIME)] = 0;
 
-    try std.posix.tcsetattr(stdin.handle, .FLUSH, raw);
+    try posix.tcsetattr(stdin.handle, .FLUSH, raw);
 
     return orig_term;
 }
 
-fn disableRawMode(stdin: std.fs.File, orig: std.posix.termios) !void {
-    try std.posix.tcsetattr(stdin.handle, .FLUSH, orig);
+fn disableRawMode(stdin: fs.File, orig: posix.termios) !void {
+    try posix.tcsetattr(stdin.handle, .FLUSH, orig);
 }
 
-fn handleCompletions(alloc: std.mem.Allocator, cmd: []const u8) !std.ArrayList([]const u8) {
+fn handleCompletions(alloc: mem.Allocator, cmd: []const u8) !std.ArrayList([]const u8) {
     var matches: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (matches.items) |match| alloc.free(match);
@@ -30,31 +35,31 @@ fn handleCompletions(alloc: std.mem.Allocator, cmd: []const u8) !std.ArrayList([
     }
 
     for (builtins) |value| {
-        if (std.mem.startsWith(u8, value, cmd)) {
+        if (mem.startsWith(u8, value, cmd)) {
             const dup: []u8 = try alloc.dupe(u8, value);
             try matches.append(alloc, dup);
         }
     }
 
-    const paths: [:0]const u8 = std.posix.getenv("PATH") orelse return matches;
-    var path_iter = std.mem.splitScalar(u8, paths, ':');
+    const paths: [:0]const u8 = posix.getenv("PATH") orelse return matches;
+    var path_iter = mem.splitScalar(u8, paths, ':');
 
     while (path_iter.next()) |dir_path| {
         if (dir_path.len == 0) continue;
 
-        var directory = try std.fs.openDirAbsolute(dir_path, .{ .iterate = true });
+        var directory: fs.Dir = try fs.openDirAbsolute(dir_path, .{ .iterate = true });
         defer directory.close();
 
         var iter = directory.iterate();
 
         while (iter.next() catch continue) |entry| {
             if (entry.kind == .file or entry.kind == .sym_link) {
-                if (std.mem.startsWith(u8, entry.name, cmd)) {
+                if (mem.startsWith(u8, entry.name, cmd)) {
                     const stat = directory.statFile(entry.name) catch continue;
                     if (stat.mode & 0o111 != 0) {
                         var exists: bool = false;
                         for (matches.items) |value| {
-                            if (std.mem.eql(u8, value, entry.name)) {
+                            if (mem.eql(u8, value, entry.name)) {
                                 exists = true;
                                 break;
                             }
@@ -94,11 +99,11 @@ fn longestCommonPrefix(matches: [][]const u8) []const u8 {
     return first[0..prefix_len];
 }
 
-pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8), prompt: []const u8) !?[]const u8 {
+pub fn readline(alloc: mem.Allocator, hst_lst: std.ArrayList([]u8), prompt: []const u8) !?[]const u8 {
     var line_buff: std.ArrayList(u8) = .empty;
     errdefer line_buff.deinit(alloc);
 
-    const infile = try std.fs.cwd().openFile("/dev/tty", .{ .mode = .read_write });
+    const infile: fs.File = try fs.cwd().openFile("/dev/tty", .{ .mode = .read_write });
     defer infile.close();
 
     var buff: [1]u8 = undefined;
@@ -109,7 +114,7 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8), prompt: 
     var fwr = infile.writer(&wbuff);
     const stdout = &fwr.interface;
 
-    const term = try enableRawMode(infile);
+    const term: posix.termios = try enableRawMode(infile);
     defer disableRawMode(infile, term) catch {};
 
     var tab_count: usize = 0;
@@ -214,9 +219,9 @@ pub fn readline(alloc: std.mem.Allocator, hst_lst: std.ArrayList([]u8), prompt: 
                                 try stdout.writeAll("\x07");
                                 try stdout.flush();
                             } else if (tab_count >= 2) {
-                                std.mem.sort([]const u8, matches.items, {}, struct {
+                                mem.sort([]const u8, matches.items, {}, struct {
                                     fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-                                        return std.mem.order(u8, a, b) == .lt;
+                                        return mem.order(u8, a, b) == .lt;
                                     }
                                 }.lessThan);
 
