@@ -1,5 +1,7 @@
 const std: type = @import("std");
 
+const hst: type = @import("history.zig");
+
 const mem: type = std.mem;
 const posix: type = std.posix;
 const fs: type = std.fs;
@@ -9,8 +11,8 @@ const consts: type = @import("consts.zig");
 const builtins: [6][]const u8 = consts.builtins;
 
 fn enableRawMode(stdin: fs.File) !posix.termios {
-    const orig_term = try posix.tcgetattr(stdin.handle);
-    var raw = orig_term;
+    const orig_term: posix.termios = try posix.tcgetattr(stdin.handle);
+    var raw: posix.termios = orig_term;
 
     raw.lflag.ECHO = false;
     raw.lflag.ICANON = false;
@@ -99,7 +101,7 @@ fn longestCommonPrefix(matches: [][]const u8) []const u8 {
     return first[0..prefix_len];
 }
 
-pub fn readline(alloc: mem.Allocator, hst_lst: std.ArrayList([]u8), prompt: []const u8) !?[]const u8 {
+pub fn readline(alloc: mem.Allocator, prompt: []const u8) !?[]const u8 {
     var line_buff: std.ArrayList(u8) = .empty;
     errdefer line_buff.deinit(alloc);
 
@@ -131,23 +133,26 @@ pub fn readline(alloc: mem.Allocator, hst_lst: std.ArrayList([]u8), prompt: []co
                 const ch: u8 = try r.takeByte();
                 switch (ch) {
                     'A' => {
-                        if (arr < hst_lst.items.len) {
+                        const hst_len: usize = try hst.get_len();
+                        if (arr < hst_len) {
                             for (line_buff.items) |_| {
                                 try stdout.writeAll("\x08 \x08");
                             }
 
                             line_buff.clearRetainingCapacity();
 
-                            const index: usize = hst_lst.items.len - arr - 1;
+                            const index: usize = hst_len - arr - 1;
+                            const item: []const u8 = try hst.get_item_at_index(index);
                             try stdout.writeAll(" ");
-                            try stdout.writeAll(hst_lst.items[index]);
+                            try stdout.writeAll(item);
                             try stdout.flush();
 
-                            try line_buff.appendSlice(alloc, hst_lst.items[index]);
+                            try line_buff.appendSlice(alloc, item);
                             arr += 1;
                         }
                     },
                     'B' => {
+                        const hst_len: usize = try hst.get_len();
                         if (arr > 0) {
                             for (line_buff.items) |_| {
                                 try stdout.writeAll("\x08 \x08");
@@ -157,11 +162,12 @@ pub fn readline(alloc: mem.Allocator, hst_lst: std.ArrayList([]u8), prompt: []co
                             arr -= 1;
 
                             if (arr > 0) {
-                                const index: usize = hst_lst.items.len - arr;
+                                const index: usize = hst_len - arr;
+                                const item: []const u8 = try hst.get_item_at_index(index);
                                 try stdout.writeAll(" ");
-                                try stdout.writeAll(hst_lst.items[index]);
+                                try stdout.writeAll(item);
 
-                                try line_buff.appendSlice(alloc, hst_lst.items[index]);
+                                try line_buff.appendSlice(alloc, item);
                             }
 
                             try stdout.flush();
