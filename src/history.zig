@@ -7,6 +7,11 @@ const fs: type = std.fs;
 var last_written_idx: usize = 0;
 var hst_arr: std.ArrayList([]u8) = .empty;
 
+pub fn deinit(alloc: mem.Allocator) void {
+    for (hst_arr.items) |val| alloc.free(val);
+    hst_arr.deinit(alloc);
+}
+
 pub fn get_len() !usize {
     return hst_arr.items.len;
 }

@@ -100,6 +100,7 @@ pub fn main() !void {
     if (histfile) |file| {
         try hst.readHistory(alloc, file);
     }
+    defer hst.deinit(alloc);
 
     while (true) {
         const ln: []const u8 = try rdln.readline(alloc, "$ ") orelse unreachable;

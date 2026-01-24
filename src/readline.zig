@@ -1,12 +1,11 @@
 const std: type = @import("std");
 
-const hst: type = @import("history.zig");
-
 const mem: type = std.mem;
 const posix: type = std.posix;
 const fs: type = std.fs;
 
 const consts: type = @import("consts.zig");
+const hst: type = @import("history.zig");
 
 const builtins: [6][]const u8 = consts.builtins;
 
