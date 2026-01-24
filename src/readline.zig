@@ -178,7 +178,12 @@ pub fn readline(alloc: mem.Allocator, prompt: []const u8) !?[]const u8 {
             std.ascii.control_code.lf, std.ascii.control_code.cr => {
                 try stdout.writeAll("\n");
                 try stdout.flush();
-                return try line_buff.toOwnedSlice(alloc);
+                if (line_buff.items.len != 0) {
+                    return try line_buff.toOwnedSlice(alloc);
+                } else {
+                    try stdout.writeAll(prompt);
+                    try stdout.flush();
+                }
             },
             std.ascii.control_code.ht => {
                 tab_count += 1;
