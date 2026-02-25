@@ -35,42 +35,64 @@ fn handleCompletions(alloc: mem.Allocator, cmd: []const u8) !std.ArrayList([]con
         matches.deinit(alloc);
     }
 
-    for (builtins) |value| {
-        if (mem.startsWith(u8, value, cmd)) {
-            const dup: []u8 = try alloc.dupe(u8, value);
-            try matches.append(alloc, dup);
+    const cnt = mem.count(u8, cmd, " ");
+
+    if (cnt >= 1) {
+        const idx = mem.lastIndexOfScalar(u8, cmd, ' ') orelse return error.InvalidInput;
+        const partial_cmd = cmd[idx + 1 ..];
+        var dir = try fs.cwd().openDir(".", .{ .iterate = true });
+        defer dir.close();
+
+        var iter = dir.iterate();
+
+        while (try iter.next()) |entry| {
+            if (entry.kind == .file) {
+                if (mem.startsWith(u8, entry.name, partial_cmd)) {
+                    const dup = try alloc.dupe(u8, entry.name);
+                    try matches.append(alloc, dup);
+                }
+            }
         }
-    }
 
-    const paths: [:0]const u8 = posix.getenv("PATH") orelse return matches;
-    var path_iter = mem.splitScalar(u8, paths, ':');
+        return matches;
+    } else {
+        for (builtins) |value| {
+            if (mem.startsWith(u8, value, cmd)) {
+                const dup: []u8 = try alloc.dupe(u8, value);
+                try matches.append(alloc, dup);
+            }
+        }
 
-    while (path_iter.next()) |dir_path| {
-        if (dir_path.len == 0) continue;
+        const paths: [:0]const u8 = posix.getenv("PATH") orelse return matches;
+        var path_iter = mem.splitScalar(u8, paths, ':');
 
-        var directory: fs.Dir = try fs.openDirAbsolute(dir_path, .{ .iterate = true });
-        defer directory.close();
+        while (path_iter.next()) |dir_path| {
+            if (dir_path.len == 0) continue;
 
-        var iter = directory.iterate();
+            var directory: fs.Dir = try fs.openDirAbsolute(dir_path, .{ .iterate = true });
+            defer directory.close();
 
-        while (iter.next() catch continue) |entry| {
-            if (entry.kind == .file or entry.kind == .sym_link) {
-                if (mem.startsWith(u8, entry.name, cmd)) {
-                    const stat = directory.statFile(entry.name) catch continue;
-                    if (stat.mode & 0o111 != 0) {
-                        var exists: bool = false;
-                        for (matches.items) |value| {
-                            if (mem.eql(u8, value, entry.name)) {
-                                exists = true;
-                                break;
+            var iter = directory.iterate();
+
+            while (iter.next() catch continue) |entry| {
+                if (entry.kind == .file or entry.kind == .sym_link) {
+                    if (mem.startsWith(u8, entry.name, cmd)) {
+                        const stat = directory.statFile(entry.name) catch continue;
+                        if (stat.mode & 0o111 != 0) {
+                            var exists: bool = false;
+                            for (matches.items) |value| {
+                                if (mem.eql(u8, value, entry.name)) {
+                                    exists = true;
+                                    break;
+                                }
                             }
-                        }
-                        if (!exists) {
-                            const dup: []u8 = alloc.dupe(u8, entry.name) catch continue;
-                            matches.append(alloc, dup) catch {
-                                alloc.free(dup);
-                                continue;
-                            };
+                            if (!exists) {
+                                const dup: []u8 = alloc.dupe(u8, entry.name) catch continue;
+                                matches.append(alloc, dup) catch {
+                                    alloc.free(dup);
+                                    continue;
+                                };
+                            }
                         }
                     }
                 }
@@ -197,6 +219,9 @@ pub fn readline(alloc: mem.Allocator, prompt: []const u8) !?[]const u8 {
                     matches.deinit(alloc);
                 }
 
+                const last_space = mem.lastIndexOfScalar(u8, partials, ' ');
+                const prefix_len = if (last_space) |idx| partials.len - idx - 1 else partials.len;
+
                 switch (matches.items.len) {
                     0 => {
                         try stdout.writeAll("\x07");
@@ -205,19 +230,19 @@ pub fn readline(alloc: mem.Allocator, prompt: []const u8) !?[]const u8 {
                     1 => {
                         const rem: []const u8 = matches.items[0];
 
-                        try stdout.writeAll(rem[partials.len..]);
+                        try stdout.writeAll(rem[prefix_len..]);
                         try stdout.writeAll(" ");
                         try stdout.flush();
 
-                        try line_buff.appendSlice(alloc, rem[partials.len..]);
+                        try line_buff.appendSlice(alloc, rem[prefix_len..]);
                         try line_buff.append(alloc, ' ');
 
                         tab_count = 0;
                     },
                     else => {
                         const lcp: []const u8 = longestCommonPrefix(matches.items);
-                        if (lcp.len > partials.len) {
-                            const remaining: []const u8 = lcp[partials.len..];
+                        if (lcp.len > prefix_len) {
+                            const remaining: []const u8 = lcp[prefix_len..];
 
                             try stdout.writeAll(remaining);
                             try stdout.flush();
