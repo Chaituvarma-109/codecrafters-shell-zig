@@ -35,69 +35,77 @@ fn handleCompletions(alloc: mem.Allocator, cmd: []const u8) !std.ArrayList([]con
         matches.deinit(alloc);
     }
 
-    const cnt = mem.count(u8, cmd, " ");
+    const cnt: usize = mem.count(u8, cmd, " ");
 
-    if (cnt >= 1) {
-        const idx = mem.lastIndexOfScalar(u8, cmd, ' ') orelse return error.InvalidInput;
-        const partial_cmd = cmd[idx + 1 ..];
-        var dir = try fs.cwd().openDir(".", .{ .iterate = true });
-        defer dir.close();
-
-        var iter = dir.iterate();
-
-        while (try iter.next()) |entry| {
-            if (entry.kind == .file) {
-                if (mem.startsWith(u8, entry.name, partial_cmd)) {
-                    const dup = try alloc.dupe(u8, entry.name);
+    switch (cnt) {
+        0 => {
+            for (builtins) |value| {
+                if (mem.startsWith(u8, value, cmd)) {
+                    const dup: []u8 = try alloc.dupe(u8, value);
                     try matches.append(alloc, dup);
                 }
             }
-        }
 
-        return matches;
-    } else {
-        for (builtins) |value| {
-            if (mem.startsWith(u8, value, cmd)) {
-                const dup: []u8 = try alloc.dupe(u8, value);
-                try matches.append(alloc, dup);
-            }
-        }
+            const paths: [:0]const u8 = posix.getenv("PATH") orelse return matches;
+            var path_iter = mem.splitScalar(u8, paths, ':');
 
-        const paths: [:0]const u8 = posix.getenv("PATH") orelse return matches;
-        var path_iter = mem.splitScalar(u8, paths, ':');
+            while (path_iter.next()) |dir_path| {
+                if (dir_path.len == 0) continue;
 
-        while (path_iter.next()) |dir_path| {
-            if (dir_path.len == 0) continue;
+                var directory: fs.Dir = try fs.openDirAbsolute(dir_path, .{ .iterate = true });
+                defer directory.close();
 
-            var directory: fs.Dir = try fs.openDirAbsolute(dir_path, .{ .iterate = true });
-            defer directory.close();
+                var iter = directory.iterate();
 
-            var iter = directory.iterate();
-
-            while (iter.next() catch continue) |entry| {
-                if (entry.kind == .file or entry.kind == .sym_link) {
-                    if (mem.startsWith(u8, entry.name, cmd)) {
-                        const stat = directory.statFile(entry.name) catch continue;
-                        if (stat.mode & 0o111 != 0) {
-                            var exists: bool = false;
-                            for (matches.items) |value| {
-                                if (mem.eql(u8, value, entry.name)) {
-                                    exists = true;
-                                    break;
+                while (iter.next() catch continue) |entry| {
+                    if (entry.kind == .file or entry.kind == .sym_link) {
+                        if (mem.startsWith(u8, entry.name, cmd)) {
+                            const stat = directory.statFile(entry.name) catch continue;
+                            if (stat.mode & 0o111 != 0) {
+                                var exists: bool = false;
+                                for (matches.items) |value| {
+                                    if (mem.eql(u8, value, entry.name)) {
+                                        exists = true;
+                                        break;
+                                    }
                                 }
-                            }
-                            if (!exists) {
-                                const dup: []u8 = alloc.dupe(u8, entry.name) catch continue;
-                                matches.append(alloc, dup) catch {
-                                    alloc.free(dup);
-                                    continue;
-                                };
+                                if (!exists) {
+                                    const dup: []u8 = alloc.dupe(u8, entry.name) catch continue;
+                                    matches.append(alloc, dup) catch {
+                                        alloc.free(dup);
+                                        continue;
+                                    };
+                                }
                             }
                         }
                     }
                 }
             }
-        }
+        },
+        else => {
+            const idx: usize = mem.lastIndexOfScalar(u8, cmd, ' ') orelse return error.InvalidInput;
+            const partial_cmd: []const u8 = cmd[idx + 1 ..];
+
+            const slash_idx: ?usize = mem.lastIndexOfScalar(u8, partial_cmd, '/');
+            const dir_part: []const u8 = if (slash_idx) |i| partial_cmd[0 .. i + 1] else "";
+            const name_prefix: []const u8 = if (slash_idx) |i| partial_cmd[i + 1 ..] else partial_cmd;
+            const search_dir: []const u8 = if (dir_part.len > 0) dir_part else ".";
+
+            var dir: fs.Dir = try fs.cwd().openDir(search_dir, .{ .iterate = true });
+            defer dir.close();
+
+            var iter = dir.iterate();
+
+            while (try iter.next()) |entry| {
+                if (entry.kind == .file or entry.kind == .directory or entry.kind == .sym_link) {
+                    if (mem.startsWith(u8, entry.name, name_prefix)) {
+                        const suffix: []const u8 = if (entry.kind == .directory) "/" else "";
+                        const dup: []u8 = try std.fmt.allocPrint(alloc, "{s}{s}{s}", .{ dir_part, entry.name, suffix });
+                        try matches.append(alloc, dup);
+                    }
+                }
+            }
+        },
     }
 
     return matches;
@@ -219,8 +227,8 @@ pub fn readline(alloc: mem.Allocator, prompt: []const u8) !?[]const u8 {
                     matches.deinit(alloc);
                 }
 
-                const last_space = mem.lastIndexOfScalar(u8, partials, ' ');
-                const prefix_len = if (last_space) |idx| partials.len - idx - 1 else partials.len;
+                const last_space: ?usize = mem.lastIndexOfScalar(u8, partials, ' ');
+                const prefix_len: usize = if (last_space) |idx| partials.len - idx - 1 else partials.len;
 
                 switch (matches.items.len) {
                     0 => {
@@ -229,13 +237,14 @@ pub fn readline(alloc: mem.Allocator, prompt: []const u8) !?[]const u8 {
                     },
                     1 => {
                         const rem: []const u8 = matches.items[0];
+                        const is_dir: bool = rem.len > 0 and rem[rem.len - 1] == '/';
 
                         try stdout.writeAll(rem[prefix_len..]);
-                        try stdout.writeAll(" ");
+                        if (!is_dir) try stdout.writeAll(" ");
                         try stdout.flush();
 
                         try line_buff.appendSlice(alloc, rem[prefix_len..]);
-                        try line_buff.append(alloc, ' ');
+                        if (!is_dir) try line_buff.append(alloc, ' ');
 
                         tab_count = 0;
                     },
