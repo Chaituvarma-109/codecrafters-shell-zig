@@ -91,7 +91,7 @@ fn handleCompletions(alloc: mem.Allocator, cmd: []const u8) !std.ArrayList([]con
             const name_prefix: []const u8 = if (slash_idx) |i| partial_cmd[i + 1 ..] else partial_cmd;
             const search_dir: []const u8 = if (dir_part.len > 0) dir_part else ".";
 
-            var dir: fs.Dir = try fs.cwd().openDir(search_dir, .{ .iterate = true });
+            var dir: fs.Dir = fs.cwd().openDir(search_dir, .{ .iterate = true }) catch return matches;
             defer dir.close();
 
             var iter = dir.iterate();
@@ -111,16 +111,22 @@ fn handleCompletions(alloc: mem.Allocator, cmd: []const u8) !std.ArrayList([]con
     return matches;
 }
 
+fn stripTrailingSlash(s: []const u8) []const u8 {
+    if (s.len > 0 and s[s.len - 1] == '/') return s[0 .. s.len - 1];
+    return s;
+}
+
 fn longestCommonPrefix(matches: [][]const u8) []const u8 {
     if (matches.len == 0) return "";
-    if (matches.len == 1) return matches[0];
+    if (matches.len == 1) return stripTrailingSlash(matches[0]);
 
-    const first: []const u8 = matches[0];
+    const first: []const u8 = stripTrailingSlash(matches[0]);
     var prefix_len: usize = 0;
 
     outer: for (first, 0..) |char, i| {
         for (matches[1..]) |str| {
-            if (i >= str.len or str[i] != char) {
+            const bare = stripTrailingSlash(str);
+            if (i >= bare.len or bare[i] != char) {
                 break :outer;
             }
         }
@@ -249,9 +255,11 @@ pub fn readline(alloc: mem.Allocator, prompt: []const u8) !?[]const u8 {
                         tab_count = 0;
                     },
                     else => {
+                        const last_space3 = mem.lastIndexOfScalar(u8, partials, ' ');
+                        const partial_arg2 = if (last_space3) |si| partials[si + 1 ..] else partials;
                         const lcp: []const u8 = longestCommonPrefix(matches.items);
-                        if (lcp.len > prefix_len) {
-                            const remaining: []const u8 = lcp[prefix_len..];
+                        if (lcp.len > partial_arg2.len) {
+                            const remaining: []const u8 = lcp[partial_arg2.len..];
 
                             try stdout.writeAll(remaining);
                             try stdout.flush();
@@ -269,10 +277,15 @@ pub fn readline(alloc: mem.Allocator, prompt: []const u8) !?[]const u8 {
                                     }
                                 }.lessThan);
 
+                                const last_space2: ?usize = mem.lastIndexOfScalar(u8, partials, ' ');
+                                const partial_arg = if (last_space2) |i| partials[i + 1 ..] else partials;
+                                const slash_idx = mem.lastIndexOfScalar(u8, partial_arg, '/');
+                                const dir_part_len = if (slash_idx) |si| si + 1 else 0;
+
                                 try stdout.writeAll("\n");
 
                                 for (matches.items, 0..) |match, i| {
-                                    try stdout.writeAll(match);
+                                    try stdout.writeAll(match[dir_part_len..]);
                                     if (i < matches.items.len - 1) {
                                         try stdout.writeAll("  ");
                                     }
