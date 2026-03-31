@@ -9,7 +9,7 @@ const rdln: type = @import("readline.zig");
 const hst: type = @import("history.zig");
 const consts: type = @import("consts.zig");
 
-const builtins: [6][]const u8 = consts.builtins;
+const builtins: [7][]const u8 = consts.builtins;
 var completion_path: ?[]const u8 = null;
 var home: ?[]const u8 = null;
 var histfile: ?[]const u8 = null;
@@ -404,6 +404,8 @@ fn executeBuiltin(alloc: mem.Allocator, cmd: []const u8, argv: [][]const u8, buf
         try handleEcho(argv, stdout);
     } else if (mem.eql(u8, cmd, "type")) {
         try handleType(buff, argv, stdout);
+    } else if (mem.eql(u8, cmd, "jobs")) {
+        try handleJob(stdout);
     } else if (mem.eql(u8, cmd, "history")) {
         if (argv.len == 3) {
             const arg: []const u8 = argv[1];
@@ -469,4 +471,8 @@ fn handleType(buff: []u8, argv: [][]const u8, stdout: *Io.Writer) !void {
     }
 
     try stdout.flush();
+}
+
+fn handleJob(stdout: *Io.Writer) !void {
+    try stdout.print("\n", .{});
 }

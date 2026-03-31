@@ -7,7 +7,7 @@ const fs: type = std.fs;
 const consts: type = @import("consts.zig");
 const hst: type = @import("history.zig");
 
-const builtins: [6][]const u8 = consts.builtins;
+const builtins: [7][]const u8 = consts.builtins;
 
 fn enableRawMode(stdin: fs.File) !posix.termios {
     const orig_term: posix.termios = try posix.tcgetattr(stdin.handle);
